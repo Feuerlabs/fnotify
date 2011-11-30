@@ -88,6 +88,7 @@ ErlDrvTermData atm_fevent;
 ErlDrvTermData atm_create;
 ErlDrvTermData atm_delete;
 ErlDrvTermData atm_modify;
+ErlDrvTermData atm_access;
 ErlDrvTermData atm_moved_from;
 ErlDrvTermData atm_moved_to;
 ErlDrvTermData atm_write;
@@ -96,6 +97,14 @@ ErlDrvTermData atm_attrib;
 ErlDrvTermData atm_link;
 ErlDrvTermData atm_rename;
 ErlDrvTermData atm_revoke;
+ErlDrvTermData atm_close_write;
+ErlDrvTermData atm_close_nowrite;
+ErlDrvTermData atm_delete_self;
+ErlDrvTermData atm_move_self;
+ErlDrvTermData atm_open;
+ErlDrvTermData atm_cookie;
+
+
 
 static int        fnotify_drv_init(void);
 static void       fnotify_drv_finish(void);
@@ -186,29 +195,29 @@ static void fnotify_send_event(drv_data_t* dptr, watch_data_t* wdata,
 
     push_atom(atm_fevent);
     push_int(event->wd);
-    if (mask & IN_ACCESS) { push_atom(atm_access); num_flags++ }
+    if (mask & IN_ACCESS) { push_atom(atm_access); num_flags++; }
     // file was accessed (read)
-    if (mask & IN_ATTRIB) { push_atom(atm_attrib); num_flags++ }
+    if (mask & IN_ATTRIB) { push_atom(atm_attrib); num_flags++; }
     // metadata changed, permission, timestamp etc
-    if (mask & IN_CLOSE_WRITE) { push_atom(atm_close_write); num_flags++ }
+    if (mask & IN_CLOSE_WRITE) { push_atom(atm_close_write); num_flags++; }
     // file opened for writing was closed
-    if (mask & IN_CLOSE_NOWRITE) { push_atom(atm_close_nowrite); num_flags++ }
+    if (mask & IN_CLOSE_NOWRITE) { push_atom(atm_close_nowrite); num_flags++; }
     // file not opened for writing was closed
-    if (mask & IN_CREATE) { push_atom(atm_create); num_flags++ }
+    if (mask & IN_CREATE) { push_atom(atm_create); num_flags++; }
     // file/directory created in watched directiory
-    if (mask & IN_DELETE) { push_atom(atm_delete); num_flags++ }
+    if (mask & IN_DELETE) { push_atom(atm_delete); num_flags++; }
     // file/directory deleted from watched directiory
-    if (mask & IN_DELETE_SELF) { push_atom(atm_delete_self); num_flags++ }
+    if (mask & IN_DELETE_SELF) { push_atom(atm_delete_self); num_flags++; }
     // watch file/directory was itself deleted 
-    if (mask & IN_MODIFIY) { push_atom(atm_modify); num_flags++ }
+    if (mask & IN_MODIFY) { push_atom(atm_modify); num_flags++; }
     // file was modified
-    if (mask & IN_MOVE_SELF) { push_atom(atm_move_self); num_flags++ }
+    if (mask & IN_MOVE_SELF) { push_atom(atm_move_self); num_flags++; }
     // Watched file/directory was itself moved
-    if (mask & IN_MOVED_FROM) { push_atom(atm_moved_from); num_flags++ }
+    if (mask & IN_MOVED_FROM) { push_atom(atm_moved_from); num_flags++; }
     // file/directory was moved out of watched directory
-    if (mask & IN_MOVED_TO) { push_atom(atm_moved_to); num_flags++ }
+    if (mask & IN_MOVED_TO) { push_atom(atm_moved_to); num_flags++; }
     // file/directory was moved into watched directory
-    if (mask & IN_OPEN) { push_atom(atm_open); num_flags++ }
+    if (mask & IN_OPEN) { push_atom(atm_open); num_flags++; }
     // file was opened
 
     // extra options to inotify_add_watch
@@ -225,7 +234,7 @@ static void fnotify_send_event(drv_data_t* dptr, watch_data_t* wdata,
     if (mask & (IN_MOVED_FROM|IN_MOVED_TO)) {
 	push_atom(atm_cookie);
 	push_int(event->cookie);
-	push_tpl(2);
+	push_tuple(2);
 	num_flags++;
     }
     push_nil();
@@ -325,7 +334,7 @@ static int fnotify_add_watch(drv_data_t* dptr, char* path, size_t len, int flags
 
     if (!(wdata = watch_data_new(path, len, -1)))
 	return -1;
-    if ((wd = inotify_add_watch(dptr->event, wdata->path, iflags)) < 0) {
+    if ((wd = inotify_add_watch(INT(dptr->event), wdata->path, iflags)) < 0) {
 	int err = errno;
 	watch_data_free(wdata);
 	errno = err;
@@ -446,8 +455,9 @@ static int fnotify_drv_init(void)
 {
     atm_fevent = driver_mk_atom("fevent");
     atm_create = driver_mk_atom("create");
-    atm_delete = driver_mk_atom("delete");;
+    atm_delete = driver_mk_atom("delete");
     atm_modify = driver_mk_atom("modify");
+    atm_access = driver_mk_atom("access");
     atm_moved_from = driver_mk_atom("moved_from");
     atm_moved_to = driver_mk_atom("moved_to");
     atm_write = driver_mk_atom("write");
@@ -456,6 +466,12 @@ static int fnotify_drv_init(void)
     atm_link = driver_mk_atom("link");
     atm_rename = driver_mk_atom("rename");
     atm_revoke = driver_mk_atom("revoke");
+    atm_close_write = driver_mk_atom("close_write");
+    atm_close_nowrite = driver_mk_atom("close_nowrite");
+    atm_delete_self = driver_mk_atom("delete_self");
+    atm_move_self = driver_mk_atom("move_self");
+    atm_open  = driver_mk_atom("open");
+    atm_cookie = driver_mk_atom("cookie");
     return 0;
 }
 
@@ -478,7 +494,7 @@ static void       fnotify_drv_stop(ErlDrvData d)
 	while(ptr) {
 	    watch_data_t* next = ptr->next;
 #if defined(HAVE_INOTIFY)
-	    inotify_rm_wacth(INT(dptr->event), ptr->wd);
+	    inotify_rm_watch(INT(dptr->event), ptr->wd);
 #elif defined(HAVE_KQUEUE)
 	    close(ptr->wd);
 #endif
