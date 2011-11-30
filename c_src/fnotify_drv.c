@@ -329,7 +329,10 @@ static int fnotify_add_watch(drv_data_t* dptr, char* path, size_t len, int flags
     watch_data_t* wdata;
     int wd;
     int iflags = IN_CREATE | IN_DELETE | IN_DELETE_SELF | 
-	IN_MOVED_FROM | IN_MOVED_TO | IN_MODIFY | IN_ATTRIB;
+	IN_MODIFY | IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO;
+    // iflags = IN_ALL_EVENTS?
+    // IN_MOVE = IN_MOVED_FROM | IN_MOVED_TO | 
+    // IN_CLOSE = IN_OPEN | IN_CLOSE_WRITE | IN_CLOSE_NOWRITE
     // FIXME: translate flags
 
     if (!(wdata = watch_data_new(path, len, -1)))
@@ -477,14 +480,14 @@ static int fnotify_drv_init(void)
 
 static void       fnotify_drv_finish(void)
 {
-    fprintf(stderr, "fnotify_drv_finish called!!!\r\n");
+    // fprintf(stderr, "fnotify_drv_finish called!!!\r\n");
 }
 
 static void       fnotify_drv_stop(ErlDrvData d)
 {
     drv_data_t* dptr = (drv_data_t*) d;
 
-    fprintf(stderr, "fnotify_drv_stop called!!!\r\n");
+    // fprintf(stderr, "fnotify_drv_stop called!!!\r\n");
     if (dptr) {
 	watch_data_t* ptr;
 
@@ -511,14 +514,14 @@ static void       fnotify_drv_output(ErlDrvData d, char* buf, int len)
     (void) d;
     (void) buf;
     (void) len;
-    fprintf(stderr, "fnotify_drv_output called!!!\r\n");
+    // fprintf(stderr, "fnotify_drv_output called!!!\r\n");
 }
 
 static void       fnotify_drv_outputv(ErlDrvData d, ErlIOVec* iov)
 {
     (void) d;
     (void) iov;
-    fprintf(stderr, "fnotify_drv_outputv called!!!\r\n");
+    // fprintf(stderr, "fnotify_drv_outputv called!!!\r\n");
 }
 
 // netlink socket triggered process data
@@ -533,7 +536,7 @@ static void fnotify_drv_ready_output(ErlDrvData d, ErlDrvEvent event)
 {
     (void) d;
     (void) event;
-    fprintf(stderr, "fnotify_drv_read_output called!!!\r\n");
+    // fprintf(stderr, "fnotify_drv_read_output called!!!\r\n");
 }
 
 
@@ -544,7 +547,7 @@ static int fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
     char* rdata = *rbuf;
     int err = 0;
 
-    fprintf(stderr, "fnotify_drv_ctl called!!!\r\n");
+    // fprintf(stderr, "fnotify_drv_ctl %d called\r\n", cmd);
 
     switch(cmd) {
 
@@ -570,7 +573,6 @@ static int fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
 	if (len != 4)
 	    goto L_einval;
 	wd = (U8(buf,0)<<24) | (U8(buf,1)<<16) | (U8(buf,2)<<8) | U8(buf,3);
-	fprintf(stderr, "fnotify_del_watch: %d\n", wd);
 	r = fnotify_del_watch(dptr, wd);
 	if (r < 0) {
 	    err = errno;
@@ -625,7 +627,7 @@ L_error:
 static void       fnotify_drv_timeout(ErlDrvData d)
 {
     (void) d;
-    fprintf(stderr, "fnotify_drv_timeout called!!!\r\n");
+    // fprintf(stderr, "fnotify_drv_timeout called!!!\r\n");
 }
 
 

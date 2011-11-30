@@ -2,11 +2,11 @@
 %%% @author Tony Rogvall <tony@rogvall.se>
 %%% @copyright (C) 2011, Tony Rogvall
 %%% @doc
-%%%    kqueue based file event server
+%%%    inotify based file event server
 %%% @end
 %%% Created :  3 Dec 2011 by Tony Rogvall <tony@rogvall.se>
 %%%-------------------------------------------------------------------
--module(fnotify_kevent_srv).
+-module(fnotify_inotify_srv).
 
 -behaviour(gen_server).
 
@@ -18,12 +18,12 @@
 
 -record(watch,
 	{
-	  pid,     %% pid watching
-	  ref,     %% watch ref / monitor
-	  wd,      %% watch descriptor
-	  is_dir,  %% path is a directory
-	  path,    %% path watched
-	  dir_list %% directory list
+	  pid,      %% pid watching
+	  ref,      %% watch ref / monitor
+	  wd,       %% watch descriptor
+	  path,     %% path watched
+	  is_dir,   %% true if path is a direcotry
+	  dir_list  %% directory list
 	}).
 	  
 -record(state, 
@@ -69,11 +69,11 @@ init([]) ->
 handle_call({watch,Pid,Path}, _From, State) when is_pid(Pid) ->
     case fnotify_drv:watch(State#state.port, Path) of
 	{ok, Wd} ->
+	    io:format("watch: ~p wd=~w\n", [Path,Wd]),
 	    Ref = monitor(process, Pid),
 	    IsDir = is_dir(Path),
-	    ListDir   = list_dir(IsDir, Path),
 	    W = #watch { pid=Pid, ref=Ref, wd=Wd, path=Path, 
-			 is_dir=IsDir, dir_list=ListDir },
+			 is_dir = IsDir, dir_list=[]},
 	    Ws = [W|State#state.watch_list],
 	    {reply, {ok,Ref}, State#state { watch_list=Ws }};
 	Error ->
@@ -82,7 +82,14 @@ handle_call({watch,Pid,Path}, _From, State) when is_pid(Pid) ->
 handle_call({unwatch,Ref}, _From, State) ->
     case lists:keytake(Ref, #watch.ref, State#state.watch_list) of
 	{value, W, Ws} ->
-	    fnotify_drv:unwatch(State#state.port, W#watch.wd),
+	    case lists:keyfind(W#watch.wd, #watch.wd, Ws) of
+		false ->
+		    Res = fnotify_drv:unwatch(State#state.port, W#watch.wd),
+		    io:format("unwatch: return=~w\n", [Res]);
+		_W2 ->
+		    %% do not unwatch since it is still in use by inotify
+		    ok
+	    end,
 	    demonitor(Ref, [flush]),
 	    {reply, ok, State#state { watch_list = Ws }};
 	false ->
@@ -119,23 +126,17 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 handle_info({fevent,Wd,Flags,Path,Name}, State) ->
     %% find all watch that as Wd as watch id
-    Ws = lists:fold(
-	   fun(W,Ws1) ->
-		   if W#watch.wd =:= Wd ->
-			   if W#watch.is_dir ->
-				   [dir_event(W,Flags)|Ws1];
-			      true ->
-				   W#watch.pid ! 
-				       {fevent,W#watch.ref,Flags,Path,Name},
-				   [W|Ws1]
-			   end;
-		      true ->
-			   [W|Ws1]
-		   end
-	   end, [], State#state.watch_list),
+    lists:foreach(
+      fun(W) ->
+	      if W#watch.wd =:= Wd ->
+		      W#watch.pid ! 
+			  {fevent,W#watch.ref,Flags,Path,Name};
+		 true ->
+		      ok
+	      end
+      end, State#state.watch_list),
     fnotify_drv:activate(State#state.port, 1),
-    State1 = State#state { watch_list = Ws },
-    {noreply, State1};
+    {noreply, State};
 handle_info({'DOWN',Ref,process,_Pid,_Reason}, State) ->
     io:format("process down pid=~w, reason=~w\n", [_Pid,_Reason]),
     case lists:keytake(Ref, #watch.ref, State#state.watch_list) of
@@ -178,37 +179,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-dir_event(W, Flags) ->
-    case lists:member(write, Flags) of
-	true ->
-	    ListDir = list_dir(true, W#watch.path),
-	    AddedFiles = ListDir -- W#watch.dir_list,
-	    RemovedFiles = W#watch.dir_list -- ListDir,
-	    lists:foreach(
-	      fun(Name) ->
-		      W#watch.pid ! 
-			  {fevent,W#watch.ref,[create],W#watch.path,Name}
-	      end, AddedFiles),
-	    lists:foreach(
-	      fun(Name) ->
-		      W#watch.pid ! 
-			  {fevent,W#watch.ref,[delete],W#watch.path,Name}
-	      end, RemovedFiles),
-	    if AddedFiles =:= [],
-	       RemovedFiles =:= [] ->
-		    W#watch.pid ! 
-			{fevent,W#watch.ref,Flags,W#watch.path,[]};
-	       true ->
-		    ok
-	    end,
-	    W#watch { dir_list = ListDir };
-	false ->
-	    W#watch.pid ! 
-		{fevent,W#watch.ref,Flags,W#watch.path,[]},
-	    W
-    end.
-	
-
 is_dir(Path) ->
     case file:read_file_info(Path) of
 	{ok,Info} ->
@@ -216,13 +186,3 @@ is_dir(Path) ->
 	_ ->
 	    false
     end.
-
-list_dir(true, Path) ->
-    case file:list_dir(Path) of
-	{ok, Files} ->
-	    Files;
-	_ ->
-	    []
-    end;
-list_dir(false, _Path) ->
-    [].
