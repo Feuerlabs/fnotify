@@ -1,0 +1,12 @@
+{application, fnotify,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { fnotify_app, []}},
+  {env, []}
+ ]}.

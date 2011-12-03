@@ -1,0 +1,3 @@
+fnotify handle file change notifications.
+On linux fnotify is implmented with inotify and
+on mac os x and bsd's kevent is used.
