@@ -119,7 +119,7 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 handle_info({fevent,Wd,Flags,Path,Name}, State) ->
     %% find all watch that as Wd as watch id
-    Ws = lists:fold(
+    Ws = lists:foldl(
 	   fun(W,Ws1) ->
 		   if W#watch.wd =:= Wd ->
 			   if W#watch.is_dir ->
@@ -160,7 +160,7 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, State) ->
-    port:port_clsoe(State#state.port),
+    erlang:port_close(State#state.port),
     ok.
 
 %%--------------------------------------------------------------------
@@ -182,20 +182,29 @@ dir_event(W, Flags) ->
     case lists:member(write, Flags) of
 	true ->
 	    ListDir = list_dir(true, W#watch.path),
-	    AddedFiles = ListDir -- W#watch.dir_list,
-	    RemovedFiles = W#watch.dir_list -- ListDir,
+	    Added = ListDir -- W#watch.dir_list,
+	    Removed = W#watch.dir_list -- ListDir,
+	    {Renamed,Added1,Removed1} =	renamed(Added,Removed,[],[]),
 	    lists:foreach(
-	      fun(Name) ->
+	      fun({Name,_I}) ->
 		      W#watch.pid ! 
 			  {fevent,W#watch.ref,[create],W#watch.path,Name}
-	      end, AddedFiles),
+	      end, Added1),
 	    lists:foreach(
-	      fun(Name) ->
+	      fun({Name,_I}) ->
 		      W#watch.pid ! 
 			  {fevent,W#watch.ref,[delete],W#watch.path,Name}
-	      end, RemovedFiles),
-	    if AddedFiles =:= [],
-	       RemovedFiles =:= [] ->
+	      end, Removed1),
+	    lists:foreach(
+	      fun({Name,OldName,I}) ->
+		      W#watch.pid ! 
+			  {fevent,W#watch.ref,[moved_from,{cookie,I}],
+			   W#watch.path,OldName},
+		      W#watch.pid ! 
+			  {fevent,W#watch.ref,[moved_to,{cookie,I}],
+			   W#watch.path,Name}
+	      end, Renamed),
+	    if Added1 =:= [], Removed1 =:= [], Renamed =:= [] ->
 		    W#watch.pid ! 
 			{fevent,W#watch.ref,Flags,W#watch.path,[]};
 	       true ->
@@ -208,6 +217,16 @@ dir_event(W, Flags) ->
 	    W
     end.
 	
+renamed(Added,[R={Name,I}|Removed],Removed1,Renamed) ->
+    case lists:keytake(I,2,Added) of
+	{value,{NewName,I},Added1} ->
+	    renamed(Added1,Removed,Removed1,[{NewName,Name,I}|Renamed]);
+	false ->
+	    renamed(Added,Removed,[R|Removed1],Renamed)
+    end;
+renamed(Added, [], Removed1, Renamed) ->
+    {Renamed,Added,Removed1}.
+    
 
 is_dir(Path) ->
     case file:read_file_info(Path) of
@@ -220,7 +239,15 @@ is_dir(Path) ->
 list_dir(true, Path) ->
     case file:list_dir(Path) of
 	{ok, Files} ->
-	    Files;
+	    lists:map(fun(Name) ->
+			      FileName = filename:join(Path,Name),
+			      case file:read_file_info(FileName) of
+				  {ok,Info} ->
+				      {Name, Info#file_info.inode};
+				  _Error ->
+				      {Name, 0}
+			      end
+		      end, Files);
 	_ ->
 	    []
     end;

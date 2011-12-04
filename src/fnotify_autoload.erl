@@ -2,35 +2,49 @@
 %%% @author Tony Rogvall <tony@rogvall.se>
 %%% @copyright (C) 2011, Tony Rogvall
 %%% @doc
-%%%    inotify based file event server
+%%%    code autoloader
 %%% @end
-%%% Created :  3 Dec 2011 by Tony Rogvall <tony@rogvall.se>
+%%% Created :  4 Dec 2011 by Tony Rogvall <tony@rogvall.se>
 %%%-------------------------------------------------------------------
--module(fnotify_inotify_srv).
+-module(fnotify_autoload).
 
 -behaviour(gen_server).
+
+%% API
+-export([start_link/0]).
+-export([start/0]).
+-export([stop/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
--include_lib("kernel/include/file.hrl").
+-define(SERVER, ?MODULE). 
 
--record(watch,
-	{
-	  pid,      %% pid watching
-	  ref,      %% watch ref / monitor
-	  wd,       %% watch descriptor
-	  path,     %% path watched
-	  is_dir,   %% true if path is a direcotry
-	  dir_list  %% directory list
-	}).
-	  
 -record(state, 
 	{
-	  port,
-	  watch_list = []
+	  path_ref = []   %% list of {Path,Ref}
 	}).
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Starts the server
+%%
+%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
+%% @end
+%%--------------------------------------------------------------------
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+start() ->
+    gen_server:start({local, ?SERVER}, ?MODULE, [], []).
+
+stop() ->
+    gen_server:call(?SERVER, stop).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -48,9 +62,18 @@
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    Port = fnotify_drv:start(),
-    fnotify_drv:activate(Port, 1),  %% activate once
-    {ok, #state{ port = Port}}.
+    %% Fixme refresh / hook code path
+    PathRef = lists:foldl(
+		fun(P,Ps) ->
+			case fnotify:watch(P) of
+			    {ok,Ref} ->
+				io:format("watch path: ~s\n", [P]),
+				[{P,Ref}|Ps];
+			    _Error ->
+				Ps
+			end
+		end, [], code:get_path()),
+    {ok, #state{path_ref=PathRef}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -66,40 +89,10 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({watch,Pid,Path}, _From, State) when is_pid(Pid) ->
-    case fnotify_drv:watch(State#state.port, Path) of
-	{ok, Wd} ->
-	    io:format("watch: ~p wd=~w\n", [Path,Wd]),
-	    Ref = monitor(process, Pid),
-	    IsDir = is_dir(Path),
-	    W = #watch { pid=Pid, ref=Ref, wd=Wd, path=Path, 
-			 is_dir = IsDir, dir_list=[]},
-	    Ws = [W|State#state.watch_list],
-	    {reply, {ok,Ref}, State#state { watch_list=Ws }};
-	Error ->
-	    {reply, Error, State}
-    end;
-handle_call({unwatch,Ref}, _From, State) ->
-    case lists:keytake(Ref, #watch.ref, State#state.watch_list) of
-	{value, W, Ws} ->
-	    case lists:keyfind(W#watch.wd, #watch.wd, Ws) of
-		false ->
-		    Res = fnotify_drv:unwatch(State#state.port, W#watch.wd),
-		    io:format("unwatch: return=~w\n", [Res]);
-		_W2 ->
-		    %% do not unwatch since it is still in use by inotify
-		    ok
-	    end,
-	    demonitor(Ref, [flush]),
-	    {reply, ok, State#state { watch_list = Ws }};
-	false ->
-	    {reply, {error,enoent}, State}
-    end;
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 handle_call(_Request, _From, State) ->
-    Reply = {error, bad_call},
-    {reply, Reply, State}.
+    {reply, {error,bad_call}, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -124,27 +117,31 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({fevent,Wd,Flags,Path,Name}, State) ->
-    %% find all watch that as Wd as watch id
-    lists:foreach(
-      fun(W) ->
-	      if W#watch.wd =:= Wd ->
-		      W#watch.pid ! 
-			  {fevent,W#watch.ref,Flags,Path,Name};
-		 true ->
-		      ok
-	      end
-      end, State#state.watch_list),
-    fnotify_drv:activate(State#state.port, 1),
-    {noreply, State};
-handle_info({'DOWN',Ref,process,_Pid,_Reason}, State) ->
-    io:format("process down pid=~w, reason=~w\n", [_Pid,_Reason]),
-    case lists:keytake(Ref, #watch.ref, State#state.watch_list) of
-	{value, W, Ws} ->
-	    fnotify_drv:unwatch(State#state.port, W#watch.wd),
-	    {noreply, State#state { watch_list = Ws }};
+handle_info(FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
+    case lists:member(create, Flags) of
+	true ->
+	    case filename:extension(Name) of
+		".beam" ->
+		    BaseName = filename:basename(Name, ".beam"),
+		    FileName = filename:join(Path,BaseName),
+		    code:purge(list_to_atom(BaseName)),
+		    case code:load_abs(FileName) of
+			ok ->
+			    {noreply,State};
+			{module,_Mod} ->
+			    {noreply,State};
+			{error, Reason} ->
+			    io:format("unable to auto-load module ~s, ~p\n",
+				      [BaseName,Reason]),
+			    {noreply,State}
+		    end;
+		_Ext ->
+		    io:format("ignore event: ~p\n", [FEvent]),	    
+		    {noreply,State}
+	    end;
 	false ->
-	    {noreply, State}
+	    io:format("ignore event: ~p\n", [FEvent]),	    
+	    {noreply,State}
     end;
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -161,7 +158,10 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, State) ->
-    erlang:port_close(State#state.port),
+    lists:foreach(
+      fun({_Path,Ref}) ->
+	      fnotify:unwatch(Ref)
+      end, State#state.path_ref),
     ok.
 
 %%--------------------------------------------------------------------
@@ -178,11 +178,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
-is_dir(Path) ->
-    case file:read_file_info(Path) of
-	{ok,Info} ->
-	    Info#file_info.type =:= directory;
-	_ ->
-	    false
-    end.
