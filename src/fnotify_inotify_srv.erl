@@ -71,7 +71,7 @@ handle_call({watch,Pid,Path}, _From, State) when is_pid(Pid) ->
 	{ok, Wd} ->
 	    io:format("watch: ~p wd=~w\n", [Path,Wd]),
 	    Ref = monitor(process, Pid),
-	    IsDir = is_dir(Path),
+	    IsDir = fnotify:is_dir(Path),
 	    W = #watch { pid=Pid, ref=Ref, wd=Wd, path=Path, 
 			 is_dir = IsDir, dir_list=[]},
 	    Ws = [W|State#state.watch_list],
@@ -179,10 +179,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-is_dir(Path) ->
-    case file:read_file_info(Path) of
-	{ok,Info} ->
-	    Info#file_info.type =:= directory;
-	_ ->
-	    false
-    end.

@@ -7,6 +7,9 @@
 
 -module(fnotify).
 -export([watch/1, unwatch/1]).
+-export([is_dir/1]).
+
+-include_lib("kernel/include/file.hrl").
 
 -define(SERVER, fnotify_srv). 
 
@@ -15,3 +18,11 @@ watch(Path) ->
 
 unwatch(Ref) ->
     gen_server:call(?SERVER, {unwatch, Ref}).
+
+is_dir(Path) ->
+    case file:read_file_info(Path) of
+	{ok,Info} ->
+	    Info#file_info.type =:= directory;
+	_ ->
+	    false
+    end.

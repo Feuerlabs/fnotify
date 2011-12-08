@@ -70,7 +70,7 @@ handle_call({watch,Pid,Path}, _From, State) when is_pid(Pid) ->
     case fnotify_drv:watch(State#state.port, Path) of
 	{ok, Wd} ->
 	    Ref = monitor(process, Pid),
-	    IsDir = is_dir(Path),
+	    IsDir = fnotify:is_dir(Path),
 	    ListDir   = list_dir(IsDir, Path),
 	    W = #watch { pid=Pid, ref=Ref, wd=Wd, path=Path, 
 			 is_dir=IsDir, dir_list=ListDir },
@@ -227,15 +227,6 @@ renamed(Added,[R={Name,I}|Removed],Removed1,Renamed) ->
 renamed(Added, [], Removed1, Renamed) ->
     {Renamed,Added,Removed1}.
     
-
-is_dir(Path) ->
-    case file:read_file_info(Path) of
-	{ok,Info} ->
-	    Info#file_info.type =:= directory;
-	_ ->
-	    false
-    end.
-
 list_dir(true, Path) ->
     case file:list_dir(Path) of
 	{ok, Files} ->

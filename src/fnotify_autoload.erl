@@ -21,9 +21,15 @@
 
 -define(SERVER, ?MODULE). 
 
--record(state, 
+%%
+%% FIXME: watch directories in ERL_LIBS and code:lib_dir()
+%%        and update code:path
+%%
+
+-record(state,
 	{
-	  path_ref = []   %% list of {Path,Ref}
+	  libs_ref = [],  %% list of {Ref,Path}
+	  path_ref = []   %% list of {Ref,Path}
 	}).
 
 %%%===================================================================
@@ -62,18 +68,11 @@ stop() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    %% Fixme refresh / hook code path
-    PathRef = lists:foldl(
-		fun(P,Ps) ->
-			case fnotify:watch(P) of
-			    {ok,Ref} ->
-				io:format("watch path: ~s\n", [P]),
-				[{P,Ref}|Ps];
-			    _Error ->
-				Ps
-			end
-		end, [], code:get_path()),
-    {ok, #state{path_ref=PathRef}}.
+    fnotify_srv:start(),
+    Libs = [code:lib_dir()] ++ string:tokens(os:getenv("ERL_LIBS"), ":"),
+    LibRef = watch_dir_list(Libs),
+    PathRef = watch_dir_list(code:get_path()),
+    {ok, #state{ libs_ref=LibRef, path_ref=PathRef}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -117,31 +116,12 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
-    case lists:member(create, Flags) of
-	true ->
-	    case filename:extension(Name) of
-		".beam" ->
-		    BaseName = filename:basename(Name, ".beam"),
-		    FileName = filename:join(Path,BaseName),
-		    code:purge(list_to_atom(BaseName)),
-		    case code:load_abs(FileName) of
-			ok ->
-			    {noreply,State};
-			{module,_Mod} ->
-			    {noreply,State};
-			{error, Reason} ->
-			    io:format("unable to auto-load module ~s, ~p\n",
-				      [BaseName,Reason]),
-			    {noreply,State}
-		    end;
-		_Ext ->
-		    io:format("ignore event: ~p\n", [FEvent]),	    
-		    {noreply,State}
-	    end;
+handle_info(FEvent={fevent,Ref,_Flags,_Path,_Name}, State) ->
+    case lists:keysearch(Ref, 1, State#state.libs_ref) of
+	{value, _} ->
+	    handle_erl_libs(FEvent, State);
 	false ->
-	    io:format("ignore event: ~p\n", [FEvent]),	    
-	    {noreply,State}
+	    handle_erl_path(FEvent, State)
     end;
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -159,7 +139,7 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 terminate(_Reason, State) ->
     lists:foreach(
-      fun({_Path,Ref}) ->
+      fun({Ref,_Path}) ->
 	      fnotify:unwatch(Ref)
       end, State#state.path_ref),
     ok.
@@ -178,3 +158,77 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+watch_dir_list(Ds) ->
+    lists:foldl(
+		fun(P,Ps) ->
+			case fnotify:watch(P) of
+			    {ok,Ref} ->
+				%% io:format("watch path: ~s\n", [P]),
+				[{Ref,P}|Ps];
+			    _Error ->
+				io:format("error unable to watch: ~s\n",[P]),
+				Ps
+			end
+		end, [], Ds).
+%%
+%% Some file among the code paths has been change
+%% If it is a beam file that has been created then load it
+%% FIXME: ignore bea# create
+%%        ignore bea# delete
+%%        handle name.app file creations (reload app)?
+%%        if . is in the code path try to handle . dynamically?
+%%
+handle_erl_path(FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
+    case lists:member(create, Flags) of
+	true ->
+	    case filename:extension(Name) of
+		".beam" ->
+		    BaseName = filename:basename(Name, ".beam"),
+		    FileName = filename:join(Path,BaseName),
+		    code:purge(list_to_atom(BaseName)),
+		    case code:load_abs(FileName) of
+			ok ->
+			    io:format("load_abs ok\n", []),
+			    {noreply,State};
+			{module,_Mod} ->
+			    io:format("module '~s' loaded\n", [_Mod]),
+			    {noreply,State};
+			{error, Reason} ->
+			    io:format("unable to auto-load module ~s, ~p\n",
+				      [BaseName,Reason]),
+			    {noreply,State}
+		    end;
+		_Ext ->
+		    io:format("ignore event: ~p\n", [FEvent]),	    
+		    {noreply,State}
+	    end;
+	false ->
+	    io:format("ignore event: ~p\n", [FEvent]),	    
+	    {noreply,State}
+    end.
+
+handle_erl_libs({fevent,_Ref,Flags,Path,Name}, State) ->
+    case lists:member(create, Flags) of
+	true ->
+	    %% - check if Name is a newly added directory 
+	    %% - check if Name/ebin is a directory 
+	    %%   if not then put watch(Name) and wait for ebin to be create
+	    PathName = filename:join(Path,Name),
+	    case fnotify:is_dir(PathName) of
+		true ->
+		    io:format("~s is a directory\n", [PathName]),
+		    EBinPathName = filename:join(PathName, "ebin"),
+		    case fnotify:is_dir(EBinPathName) of
+			true ->
+			    io:format("~s is a directory\n", [EBinPathName]);
+			false ->
+			    io:format("~s is not a directory\n", [EBinPathName])
+		    end,
+		    {noreply, State};
+		false ->
+		    {noreply, State}
+	    end;
+	false ->
+	    {noreply, State}
+    end.
