@@ -32,6 +32,12 @@
 	  path_ref = []   %% list of {Ref,Path}
 	}).
 
+-ifdef(debug).
+-define(dbg(F, A), io:format((F), (A))).
+-else.
+-define(dbg(F, A), ok).
+-endif.
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -69,7 +75,11 @@ stop() ->
 %%--------------------------------------------------------------------
 init([]) ->
     fnotify_srv:start(),
-    Libs = [code:lib_dir()] ++ string:tokens(os:getenv("ERL_LIBS"), ":"),
+    Libs0 = case os:getenv("ERL_LIBS") of
+		false -> [];
+		ErlLibs -> string:tokens(ErlLibs, ":")
+	    end,
+    Libs = [code:lib_dir()] ++ Libs0,
     LibRef = watch_dir_list(Libs),
     PathRef = watch_dir_list(code:get_path()),
     {ok, #state{ libs_ref=LibRef, path_ref=PathRef}}.
@@ -164,10 +174,10 @@ watch_dir_list(Ds) ->
 		fun(P,Ps) ->
 			case fnotify:watch(P) of
 			    {ok,Ref} ->
-				%% io:format("watch path: ~s\n", [P]),
+				?dbg("watch path: ~s\n", [P]),
 				[{Ref,P}|Ps];
 			    _Error ->
-				io:format("error unable to watch: ~s\n",[P]),
+				?dbg("error unable to watch: ~s\n",[P]),
 				Ps
 			end
 		end, [], Ds).
@@ -179,20 +189,29 @@ watch_dir_list(Ds) ->
 %%        handle name.app file creations (reload app)?
 %%        if . is in the code path try to handle . dynamically?
 %%
-handle_erl_path(FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
+handle_erl_path(_FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
     case lists:member(create, Flags) of
 	true ->
 	    case filename:extension(Name) of
 		".beam" ->
 		    BaseName = filename:basename(Name, ".beam"),
 		    FileName = filename:join(Path,BaseName),
-		    code:purge(list_to_atom(BaseName)),
+		    Module = list_to_atom(BaseName),
+		    WasLoaded = case code:is_loaded(Module) of
+				    {file, _OldFiledName} -> true;
+				    false -> false
+				end,
+		    code:purge(Module),
 		    case code:load_abs(FileName) of
 			ok ->
-			    io:format("load_abs ok\n", []),
+			    ?dbg("load_abs ok\n", []),
 			    {noreply,State};
 			{module,_Mod} ->
-			    io:format("module '~s' loaded\n", [_Mod]),
+			    if WasLoaded ->
+				    io:format("module '~s' reloaded\n", [_Mod]);
+			       true ->
+				    io:format("module '~s' loaded\n", [_Mod])
+			    end,
 			    {noreply,State};
 			{error, Reason} ->
 			    io:format("unable to auto-load module ~s, ~p\n",
@@ -200,11 +219,11 @@ handle_erl_path(FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
 			    {noreply,State}
 		    end;
 		_Ext ->
-		    io:format("ignore event: ~p\n", [FEvent]),	    
+		    ?dbg("ignore event: ~p\n", [_FEvent]),
 		    {noreply,State}
 	    end;
 	false ->
-	    io:format("ignore event: ~p\n", [FEvent]),	    
+	    ?dbg("ignore event: ~p\n", [_FEvent]),
 	    {noreply,State}
     end.
 
@@ -217,13 +236,13 @@ handle_erl_libs({fevent,_Ref,Flags,Path,Name}, State) ->
 	    PathName = filename:join(Path,Name),
 	    case fnotify:is_dir(PathName) of
 		true ->
-		    io:format("~s is a directory\n", [PathName]),
+		    ?dbg("~s is a directory\n", [PathName]),
 		    EBinPathName = filename:join(PathName, "ebin"),
 		    case fnotify:is_dir(EBinPathName) of
 			true ->
-			    io:format("~s is a directory\n", [EBinPathName]);
+			    ?dbg("~s is a directory\n", [EBinPathName]);
 			false ->
-			    io:format("~s is not a directory\n", [EBinPathName])
+			    ?dbg("~s is not a directory\n", [EBinPathName])
 		    end,
 		    {noreply, State};
 		false ->

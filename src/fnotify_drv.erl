@@ -17,6 +17,12 @@
 -define(FNOTIFY_REP_OK,     0).
 -define(FNOTIFY_REP_ERROR,  1).
 
+-ifdef(debug).
+-define(dbg(F, A), io:format((F), (A))).
+-else.
+-define(dbg(F, A), ok).
+-endif.
+
 start() ->
     Port = open(),
     activate(Port),
@@ -48,7 +54,7 @@ unwatch(Port, Wd) ->
 open() ->
     Driver = "fnotify_drv",
     Path = code:priv_dir(fnotify),
-    io:format("load_driver '~s' from: '~s'\n", [Driver, Path]),
+    ?dbg("load_driver '~s' from: '~s'\n", [Driver, Path]),
     case erl_ddll:load_driver(Path, Driver) of
 	ok ->
 	    erlang:open_port({spawn_driver, Driver}, [binary]);
