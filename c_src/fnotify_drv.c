@@ -23,6 +23,13 @@
 
 #include "erl_driver.h"
 
+// Hack to handle R15 driver used with pre R15 driver
+#if ERL_DRV_EXTENDED_MAJOR_VERSION == 1
+typedef int  ErlDrvSizeT;
+typedef int  ErlDrvSSizeT;
+#endif
+
+
 #define FNOTIFY_ADD_WATCH  1
 #define FNOTIFY_DEL_WATCH  2
 #define FNOTIFY_ACTIVATE   3
@@ -109,12 +116,12 @@ ErlDrvTermData atm_cookie;
 static int        fnotify_drv_init(void);
 static void       fnotify_drv_finish(void);
 static void       fnotify_drv_stop(ErlDrvData);
-static void       fnotify_drv_output(ErlDrvData, char*, int);
+static void       fnotify_drv_output(ErlDrvData, char*, ErlDrvSizeT);
 static void       fnotify_drv_outputv(ErlDrvData, ErlIOVec*);
 static void       fnotify_drv_ready_input(ErlDrvData, ErlDrvEvent);
 static void       fnotify_drv_ready_output(ErlDrvData data, ErlDrvEvent event);
 static ErlDrvData fnotify_drv_start(ErlDrvPort, char* command);
-static int        fnotify_drv_ctl(ErlDrvData,unsigned int,char*, int,char**,int);
+static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData,unsigned int,char*,ErlDrvSizeT,char**,ErlDrvSizeT);
 static void       fnotify_drv_timeout(ErlDrvData);
 
 static watch_data_t* watch_data_new(char* path, size_t len, int wd)
@@ -509,7 +516,7 @@ static void       fnotify_drv_stop(ErlDrvData d)
     }
 }
 
-static void       fnotify_drv_output(ErlDrvData d, char* buf, int len)
+static void       fnotify_drv_output(ErlDrvData d, char* buf, ErlDrvSizeT len)
 {
     (void) d;
     (void) buf;
@@ -540,8 +547,9 @@ static void fnotify_drv_ready_output(ErlDrvData d, ErlDrvEvent event)
 }
 
 
-static int fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
-		      int len,char** rbuf,int rlen)
+static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
+				    ErlDrvSizeT len,char** rbuf,
+				    ErlDrvSizeT rlen)
 {
     drv_data_t* dptr = (drv_data_t*) d;
     char* rdata = *rbuf;

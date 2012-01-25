@@ -23,7 +23,7 @@
 
 %%
 %% FIXME: watch directories in ERL_LIBS and code:lib_dir()
-%%        and update code:path
+%%        and update code:path  (fnotify_autopath)
 %%
 
 -record(state,

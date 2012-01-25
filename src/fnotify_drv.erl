@@ -1,7 +1,7 @@
 %%% @author Tony Rogvall <tony@rogvall.se>
 %%% @copyright (C) 2011, Tony Rogvall
 %%% @doc
-%%%    launch netlink_drv
+%%%    launch fnotify_drv
 %%% @end
 %%% Created : 30 Nov 2011 by Tony Rogvall <tony@rogvall.se>
 
