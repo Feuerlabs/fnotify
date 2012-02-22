@@ -1,3 +1,19 @@
-fnotify handle file change notifications.
-On linux fnotify is implmented with inotify and
+fnotify handles file change notifications.
+On linux fnotify is implemented with inotify and
 on mac os x and bsd's kevent is used.
+
+Depending on how many libraries there are, a lot of 
+filedescriptors may be consumed:
+
+The way to add more file descriptors to processes on max os x is to:
+
+   sysctl kern.maxfilesperproc
+
+   	  To check maximum possible
+
+   launchctl limit
+   	  To check process limits
+
+   launchctl limit maxfiles N N
+
+   	  To set process limits - works sometimes..

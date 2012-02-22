@@ -10,6 +10,7 @@
 
 -behaviour(gen_server).
 
+-define(debug, true).
 %% API
 -export([start_link/0]).
 -export([start/0]).
@@ -21,19 +22,13 @@
 
 -define(SERVER, ?MODULE). 
 
-%%
-%% FIXME: watch directories in ERL_LIBS and code:lib_dir()
-%%        and update code:path  (fnotify_autopath)
-%%
-
 -record(state,
 	{
-	  libs_ref = [],  %% list of {Ref,Path}
 	  path_ref = []   %% list of {Ref,Path}
 	}).
 
 -ifdef(debug).
--define(dbg(F, A), io:format((F), (A))).
+-define(dbg(F, A), io:format("~s:~w: "++(F),[?FILE,?LINE|(A)])).
 -else.
 -define(dbg(F, A), ok).
 -endif.
@@ -75,14 +70,8 @@ stop() ->
 %%--------------------------------------------------------------------
 init([]) ->
     fnotify_srv:start(),
-    Libs0 = case os:getenv("ERL_LIBS") of
-		false -> [];
-		ErlLibs -> string:tokens(ErlLibs, ":")
-	    end,
-    Libs = [code:lib_dir()] ++ Libs0,
-    LibRef = watch_dir_list(Libs),
     PathRef = watch_dir_list(code:get_path()),
-    {ok, #state{ libs_ref=LibRef, path_ref=PathRef}}.
+    {ok, #state{ path_ref=PathRef}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -113,6 +102,29 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+
+%% add path message (from autopath)
+handle_cast({add_autopath,Path}, State) ->
+    ?dbg("adding autopath directory '~s'\n", [Path]),
+    case watch_dir(Path, State#state.path_ref) of
+	{true,PathRef1} ->
+	    code:add_path(Path),
+	    {noreply, State#state { path_ref = PathRef1}};
+	{false,_} ->
+	    {noreply, State}
+    end;
+handle_cast({del_autopath,Path}, State) ->
+    ?dbg("deleting autopath directory '~s'\n", [Path]),
+    case lists:keytake(Path, 2, State#state.path_ref) of
+	false ->
+	    ?dbg("autopath not watched '~s'\n", [Path]),
+	    {noreply, State};
+	{value,{_,Ref},PathRef1} ->
+	    fnotify:unwatch(Ref),
+	    _Res = code:del_path(Path),
+	    ?dbg("autopath  '~s' deleted res=~w\n", [Path,_Res]),
+	    {noreply, State#state { path_ref = PathRef1}}
+    end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -126,14 +138,11 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(FEvent={fevent,Ref,_Flags,_Path,_Name}, State) ->
-    case lists:keysearch(Ref, 1, State#state.libs_ref) of
-	{value, _} ->
-	    handle_erl_libs(FEvent, State);
-	false ->
-	    handle_erl_path(FEvent, State)
-    end;
+handle_info(FEvent={fevent,_Ref,_Flags,_Path,_Name}, State) ->
+    ?dbg("got event: ~p\n", [FEvent]),
+    handle_erl_path(FEvent, State);
 handle_info(_Info, State) ->
+    ?dbg("got info: ~p\n", [_Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -169,18 +178,23 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-watch_dir_list(Ds) ->
+watch_dir_list(DirList0) ->
     lists:foldl(
-		fun(P,Ps) ->
-			case fnotify:watch(P) of
-			    {ok,Ref} ->
-				?dbg("watch path: ~s\n", [P]),
-				[{Ref,P}|Ps];
-			    _Error ->
-				?dbg("error unable to watch: ~s\n",[P]),
-				Ps
-			end
-		end, [], Ds).
+		fun(Dir,DirList) ->
+			{_,DirList1} = watch_dir(Dir, DirList),
+			DirList1
+		end, [], DirList0).
+
+watch_dir(Dir, WList) ->
+    case fnotify:watch(Dir) of
+	{ok,Ref} ->
+	    ?dbg("watch path: ~s\n", [Dir]),
+	    {true,[{Ref,Dir}|WList]};
+	_Error ->
+	    ?dbg("error unable to watch: '~s' error:~p\n",[Dir,_Error]),
+	    {false,WList}
+    end.
+
 %%
 %% Some file among the code paths has been change
 %% If it is a beam file that has been created then load it
@@ -190,7 +204,7 @@ watch_dir_list(Ds) ->
 %%        if . is in the code path try to handle . dynamically?
 %%
 handle_erl_path(_FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
-    case lists:member(create, Flags) of
+    case was_created(Flags) of
 	true ->
 	    case filename:extension(Name) of
 		".beam" ->
@@ -227,27 +241,15 @@ handle_erl_path(_FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
 	    {noreply,State}
     end.
 
-handle_erl_libs({fevent,_Ref,Flags,Path,Name}, State) ->
+was_created(Flags) ->
     case lists:member(create, Flags) of
 	true ->
-	    %% - check if Name is a newly added directory 
-	    %% - check if Name/ebin is a directory 
-	    %%   if not then put watch(Name) and wait for ebin to be create
-	    PathName = filename:join(Path,Name),
-	    case fnotify:is_dir(PathName) of
-		true ->
-		    ?dbg("~s is a directory\n", [PathName]),
-		    EBinPathName = filename:join(PathName, "ebin"),
-		    case fnotify:is_dir(EBinPathName) of
-			true ->
-			    ?dbg("~s is a directory\n", [EBinPathName]);
-			false ->
-			    ?dbg("~s is not a directory\n", [EBinPathName])
-		    end,
-		    {noreply, State};
-		false ->
-		    {noreply, State}
-	    end;
+	    true;
 	false ->
-	    {noreply, State}
+	    case lists:member(moved_to, Flags) of
+		true ->
+		    true;
+		false ->
+		    false
+	    end
     end.
