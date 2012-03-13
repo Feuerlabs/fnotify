@@ -15,6 +15,7 @@
 -export([start_link/0]).
 -export([start/0]).
 -export([stop/0]).
+-export([dirs/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -53,6 +54,9 @@ start() ->
 stop() ->
     gen_server:call(?SERVER, stop).
 
+dirs() ->
+    gen_server:call(?SERVER, dirs).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -89,7 +93,11 @@ init([]) ->
 %%--------------------------------------------------------------------
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
+handle_call(dirs, _From, State= #state {path_ref = Dirs}) ->
+    io:format("Watched directories:\n ~p\n", [Dirs]),
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
+    io:format("Bad call: ~p\n", [_Request]),
     {reply, {error,bad_call}, State}.
 
 %%--------------------------------------------------------------------
