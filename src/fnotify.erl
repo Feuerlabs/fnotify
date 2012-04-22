@@ -23,8 +23,6 @@ is_dir(Path) ->
     case file:read_file_info(Path) of
 	{ok,Info} ->
 	    Info#file_info.type =:= directory;
-	{ok,_} ->
-	    false;
 	Error ->
 	    Error
     end.

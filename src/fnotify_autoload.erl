@@ -10,10 +10,10 @@
 
 -behaviour(gen_server).
 
--define(debug, true).
+%% -define(debug, true).
 %% API
--export([start_link/0]).
--export([start/0]).
+-export([start_link/0,start_link/1]).
+-export([start/0,start/1]).
 -export([stop/0]).
 -export([dirs/0]).
 
@@ -25,7 +25,8 @@
 
 -record(state,
 	{
-	  path_ref = []   %% list of {Ref,Path}
+	  path_filter = [], %% prefix path filter
+	  path_ref = []     %% list of {Ref,Path}
 	}).
 
 -ifdef(debug).
@@ -46,10 +47,17 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+    start_link([]).
+
+start_link(Options) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [Options], []).
 
 start() ->
-    gen_server:start({local, ?SERVER}, ?MODULE, [], []).
+    start([]).
+
+start(Options) ->
+    gen_server:start({local, ?SERVER}, ?MODULE, [Options], []).
+
 
 stop() ->
     gen_server:call(?SERVER, stop).
@@ -72,10 +80,17 @@ dirs() ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([]) ->
+init([Options]) ->
     fnotify_srv:start(),
-    PathRef = watch_dir_list(code:get_path()),
-    {ok, #state{ path_ref=PathRef}}.
+    Filter = 
+	case proplists:get_bool(watch_lib_dir, Options) of
+	    false -> 
+		[code:lib_dir()];
+	    true ->
+		[]
+	end,
+    PathRef = watch_dir_list(Filter, code:get_path()),
+    {ok, #state{ path_filter=Filter, path_ref=PathRef}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -186,12 +201,17 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-watch_dir_list(DirList0) ->
+watch_dir_list(Filter, DirList0) ->
     lists:foldl(
-		fun(Dir,DirList) ->
-			{_,DirList1} = watch_dir(Dir, DirList),
-			DirList1
-		end, [], DirList0).
+      fun(Dir,DirList) ->
+	      Exclude = lists:any(fun (F) -> lists:prefix(F, Dir) end, Filter),
+	      if Exclude ->
+		      DirList;
+		 true ->
+		      {_,DirList1} = watch_dir(Dir, DirList),
+		      DirList1
+	      end
+      end, [], DirList0).
 
 watch_dir(Dir, WList) ->
     case fnotify:watch(Dir) of

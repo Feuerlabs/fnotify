@@ -19,9 +19,10 @@
 %% @doc
 %% Starts the server
 %%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
+-spec start_link() -> {ok, pid()} | ignore | {error, term()}.
+
 start() ->
     Module = fnotify_module(),
     gen_server:start({local, ?SERVER}, Module, [], []).
