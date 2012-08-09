@@ -33,5 +33,6 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    {ok, { {one_for_one, 5, 10}, []} }.
+    FnotifyServer = ?CHILD(fnotify_srv, worker),
+    {ok, { {one_for_one, 5, 10}, [FnotifyServer]} }.
 
