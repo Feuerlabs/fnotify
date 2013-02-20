@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -38,7 +39,7 @@ typedef int  ErlDrvSSizeT;
 #define FNOTIFY_REP_ERROR  1
 
 #define MAX_PATH_LEN   4096
-#define MAX_EVENTS     1024
+#define MAX_EVENTS     2048
 
 #define U8(ptr,i)  (((unsigned char*)(ptr))[(i)])
 #define INT(ptr)   ((int)((long)(ptr)))
@@ -112,7 +113,6 @@ ErlDrvTermData atm_open;
 ErlDrvTermData atm_cookie;
 
 
-
 static int        fnotify_drv_init(void);
 static void       fnotify_drv_finish(void);
 static void       fnotify_drv_stop(ErlDrvData);
@@ -123,6 +123,32 @@ static void       fnotify_drv_ready_output(ErlDrvData data, ErlDrvEvent event);
 static ErlDrvData fnotify_drv_start(ErlDrvPort, char* command);
 static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData,unsigned int,char*,ErlDrvSizeT,char**,ErlDrvSizeT);
 static void       fnotify_drv_timeout(ErlDrvData);
+
+#ifdef DEBUG
+extern void emit_error(int level, char* file, int line, ...);
+#define DEBUGF(args...) emit_error(5,__FILE__,__LINE__,args)
+#define INFOF(args...)  emit_error(3,__FILE__,__LINE__,args)
+#else
+#define DEBUGF(args...)
+#define INFOF(args...)
+#endif
+
+static int debug_level = 3;
+void emit_error(int level, char* file, int line, ...)
+{
+    va_list ap;
+    char* fmt;
+
+    if (level <= debug_level) {
+	va_start(ap, line);
+	fmt = va_arg(ap, char*);
+
+	fprintf(stderr, "%s:%d: ", file, line); 
+	vfprintf(stderr, fmt, ap);
+	fprintf(stderr, "\r\n");
+	va_end(ap);
+    }
+}
 
 static watch_data_t* watch_data_new(char* path, size_t len, int wd)
 {
@@ -327,6 +353,7 @@ static int fnotify_init_watch(drv_data_t* dptr)
 #endif
     if (fd >= 0)
 	dptr->event = (ErlDrvEvent)((long)fd);
+    DEBUGF("kqueue fd=%d", fd);
     return fd;
 }
 
@@ -367,15 +394,18 @@ static int fnotify_add_watch(drv_data_t* dptr, char* path, size_t len, int flags
 	return -1;
     if ((wd = open(wdata->path, O_EVTONLY)) < 0) {
 	int err = errno;
+	INFOF("open failed, %s", strerror(errno));
 	watch_data_free(wdata);
 	errno = err;
 	return wd;
     }
+    DEBUGF("open fd=%d", wd);
     wdata->wd = wd;
     EV_SET(&ev_add, wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, 
 	   vnode_events, 0, wdata);
     if (kevent(INT(dptr->event), &ev_add, 1, NULL, 0, &timePoll) < 0) {
 	int r = errno;
+	INFOF("kevent EV_ADD|EV_CLEAR failed, %s", strerror(errno));
 	watch_data_free(wdata);
 	errno = r;
 	return -1;
@@ -419,8 +449,11 @@ static int fnotify_del_watch(drv_data_t* dptr, int wd)
 
     // FIXME: translate flags
     EV_SET(&ev_del, wd, EVFILT_VNODE, EV_DELETE, vnode_events, 0, wdata);
-    if ((r = kevent(INT(dptr->event), &ev_del, 1, NULL, 0, &timePoll)) < 0)
+    if ((r = kevent(INT(dptr->event), &ev_del, 1, NULL, 0, &timePoll)) < 0) {
+	INFOF("kevent EV_DELETE failed, %s", strerror(errno));
 	return -1;
+    }
+    DEBUGF("close fd=%d", wd);
     close(wd);
     watch_data_del(dptr, pptr);
     watch_data_free(wdata);
@@ -451,7 +484,8 @@ static void fnotify_handle_event(drv_data_t* dptr)
 
     n = kevent(INT(dptr->event), NULL, 0, ev_list, MAX_EVENTS, &timePoll);
     if (n < 0) {
-	fprintf(stderr, "kevent failed, %s\r\n", strerror(errno));
+	INFOF("kevent failed, %s", strerror(errno));
+	exit(1);
 	return;
     }
     for (i = 0; i < n; i++) {
@@ -487,7 +521,7 @@ static int fnotify_drv_init(void)
 
 static void       fnotify_drv_finish(void)
 {
-    // fprintf(stderr, "fnotify_drv_finish called!!!\r\n");
+    INFOF("finish called");
 }
 
 static void       fnotify_drv_stop(ErlDrvData d)
@@ -511,6 +545,7 @@ static void       fnotify_drv_stop(ErlDrvData d)
 	    watch_data_free(ptr);
 	    ptr = next;
 	}
+	DEBUGF("close fd=%d\r\n", INT(dptr->event));
 	close(INT(dptr->event));
 	driver_free(dptr);
     }
@@ -521,14 +556,14 @@ static void       fnotify_drv_output(ErlDrvData d, char* buf, ErlDrvSizeT len)
     (void) d;
     (void) buf;
     (void) len;
-    // fprintf(stderr, "fnotify_drv_output called!!!\r\n");
+    INFOF("output called");
 }
 
 static void       fnotify_drv_outputv(ErlDrvData d, ErlIOVec* iov)
 {
     (void) d;
     (void) iov;
-    // fprintf(stderr, "fnotify_drv_outputv called!!!\r\n");
+    INFOF("outputv called");
 }
 
 // netlink socket triggered process data
@@ -536,6 +571,7 @@ static void fnotify_drv_ready_input(ErlDrvData d, ErlDrvEvent event)
 {
     drv_data_t* dptr = (drv_data_t*) d;
     (void) event;
+    DEBUGF("ready_input event=%d fd=%d", INT(event), INT(dptr->event));
     fnotify_handle_event(dptr);
 }
 
@@ -543,7 +579,7 @@ static void fnotify_drv_ready_output(ErlDrvData d, ErlDrvEvent event)
 {
     (void) d;
     (void) event;
-    // fprintf(stderr, "fnotify_drv_read_output called!!!\r\n");
+    INFOF("ready_output called");
 }
 
 
@@ -555,7 +591,7 @@ static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
     char* rdata = *rbuf;
     int err = 0;
 
-    // fprintf(stderr, "fnotify_drv_ctl %d called\r\n", cmd);
+    INFOF("fnotify_drv_ctl: cmd=%d, fd=%d", cmd, INT(dptr->event));
 
     switch(cmd) {
 

@@ -7,7 +7,7 @@
 
 -module(fnotify).
 -export([watch/1, unwatch/1]).
--export([is_dir/1]).
+-export([is_dir/1, status/0]).
 
 -include_lib("kernel/include/file.hrl").
 
@@ -26,3 +26,6 @@ is_dir(Path) ->
 	Error ->
 	    Error
     end.
+
+status() ->
+    gen_server:call(?SERVER, status).

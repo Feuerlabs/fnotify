@@ -90,6 +90,8 @@ handle_call({unwatch,Ref}, _From, State) ->
     end;
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
+handle_call(status, _From, State) ->
+    {reply, {ok,[{size,length(State#state.watch_list)}]}, State};
 handle_call(_Request, _From, State) ->
     Reply = {error, bad_call},
     {reply, Reply, State}.

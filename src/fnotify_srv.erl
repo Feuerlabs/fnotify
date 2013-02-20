@@ -36,7 +36,7 @@ stop() ->
 
 fnotify_module() ->
     case os:type() of
-	{unix,linux} -> fnotify_inotify_srv;
+	{unix,linux}  -> fnotify_inotify_srv;
 	{unix,darwin} -> fnotify_kevent_srv
     end.
 
