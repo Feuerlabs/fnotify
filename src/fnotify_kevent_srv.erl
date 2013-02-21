@@ -73,8 +73,8 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({watch,Pid,Path}, _From, State) when is_pid(Pid) ->
-    case fnotify_drv:watch(State#state.port, Path) of
+handle_call({watch,Pid,Path,Flags}, _From, State) when is_pid(Pid) ->
+    case fnotify_drv:watch(State#state.port,Path,Flags) of
 	{ok, Wd} ->
 	    Ref = monitor(process, Pid),
 	    IsDir = fnotify:is_dir(Path),

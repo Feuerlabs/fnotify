@@ -50,6 +50,15 @@ typedef int  ErlDrvSSizeT;
 #define MAX_PATH_LEN   4096
 #define MAX_EVENTS     2048
 
+#define FLAG_CREATE   0x01
+#define FLAG_DELETE   0x02
+#define FLAG_MODIFY   0x04  // write|extend|modify
+#define FLAG_ATTRIB   0x08  // attribute was changed
+#define FLAG_LINK     0x10  // link count changed
+#define FLAG_RENAME   0x20  // moved renamed
+#define FLAG_REVOKE   0x40
+
+
 #define U8(ptr,i)  (((unsigned char*)(ptr))[(i)])
 #define INT(ptr)   ((int)((long)(ptr)))
 
@@ -371,12 +380,18 @@ static int fnotify_add_watch(drv_data_t* dptr, char* path, size_t len, int flags
 #if defined(HAVE_INOTIFY)
     watch_data_t* wdata;
     int wd;
-    int iflags = IN_CREATE | IN_DELETE | IN_DELETE_SELF | 
-	IN_MODIFY | IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO;
+    int iflags = 0;
+
+    if (flags & FLAG_CREATE) iflags |= (IN_CREATE);
+    if (flags & FLAG_DELETE) iflags |= (IN_DELETE|IN_DELETE_SELF);
+    if (flags & FLAG_MODIFY) iflags |= (IN_MODIFY);
+    if (flags & FLAG_ATTRIB) iflags |= (IN_ATTRIB);
+    // if (flags & FLAG_LINK)   iflags |= ;
+    if (flags & FLAG_RENAME)   iflags |= (IN_MOVED_FROM|IN_MOVED_TO);
+    // if (flags & FLAG_REVOKE)   iflags |= ;
     // iflags = IN_ALL_EVENTS?
     // IN_MOVE = IN_MOVED_FROM | IN_MOVED_TO | 
     // IN_CLOSE = IN_OPEN | IN_CLOSE_WRITE | IN_CLOSE_NOWRITE
-    // FIXME: translate flags
 
     if (!(wdata = watch_data_new(path, len, -1)))
 	return -1;
@@ -395,9 +410,15 @@ static int fnotify_add_watch(drv_data_t* dptr, char* path, size_t len, int flags
     struct kevent ev_add;
     struct timespec timePoll  = { 0, 0 };
     watch_data_t* wdata;
-    unsigned int vnode_events = NOTE_DELETE |  NOTE_WRITE | NOTE_EXTEND |
-	NOTE_ATTRIB | NOTE_LINK | NOTE_RENAME | NOTE_REVOKE;
-    // FIXME: translate flags
+    unsigned int vnode_events = 0;
+
+    if (flags & FLAG_CREATE) vnode_events |= (NOTE_WRITE);
+    if (flags & FLAG_DELETE) vnode_events |= (NOTE_WRITE|NOTE_DELETE);
+    if (flags & FLAG_MODIFY) vnode_events |= (NOTE_WRITE|NOTE_DELETE);
+    if (flags & FLAG_ATTRIB) vnode_events |= (NOTE_ATTRIB);
+    if (flags & FLAG_LINK)   vnode_events |= (NOTE_LINK);
+    if (flags & FLAG_RENAME) vnode_events |= (NOTE_RENAME|NOTE_WRITE);
+    if (flags & FLAG_REVOKE) vnode_events |= (NOTE_REVOKE);
 
     if (!(wdata = watch_data_new(path, len, -1)))
 	return -1;
@@ -668,12 +689,12 @@ L_einval:
 L_error:
     rdata[0] = FNOTIFY_REP_ERROR;
     {
-	char* err_str = strerror(err);
+        char* err_str = erl_errno_id(err);
 	int   err_str_len = strlen(err_str);
 	if (err_str_len > 255) err_str_len = 255;
 	if (err_str_len >= rlen) err_str_len = rlen - 1;
 	memcpy(&rdata[1], err_str, err_str_len);
-	return err_str_len;
+	return err_str_len+1;
     }
 }
 

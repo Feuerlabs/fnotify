@@ -73,10 +73,10 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({watch,Pid,Path}, _From, State) when is_pid(Pid) ->
-    case fnotify_drv:watch(State#state.port, Path) of
+handle_call({watch,Pid,Path,Flags}, _From, State) when is_pid(Pid) ->
+    case fnotify_drv:watch(State#state.port, Path, Flags) of
 	{ok, Wd} ->
-	    io:format("watch: ~p wd=~w\n", [Path,Wd]),
+	    %% io:format("watch: ~p wd=~w\n", [Path,Wd]),
 	    Ref = monitor(process, Pid),
 	    IsDir = fnotify:is_dir(Path),
 	    W = #watch { pid=Pid, ref=Ref, wd=Wd, path=Path, 
@@ -91,8 +91,9 @@ handle_call({unwatch,Ref}, _From, State) ->
 	{value, W, Ws} ->
 	    case lists:keyfind(W#watch.wd, #watch.wd, Ws) of
 		false ->
-		    Res = fnotify_drv:unwatch(State#state.port, W#watch.wd),
-		    io:format("unwatch: return=~w\n", [Res]);
+		    _Res = fnotify_drv:unwatch(State#state.port, W#watch.wd),
+		    %% io:format("unwatch: return=~w\n", [_Res]);
+		    ok;
 		_W2 ->
 		    %% do not unwatch since it is still in use by inotify
 		    ok
@@ -147,7 +148,7 @@ handle_info({fevent,Wd,Flags,Path,Name}, State) ->
     fnotify_drv:activate(State#state.port, 1),
     {noreply, State};
 handle_info({'DOWN',Ref,process,_Pid,_Reason}, State) ->
-    io:format("process down pid=~w, reason=~w\n", [_Pid,_Reason]),
+    %% io:format("process down pid=~w, reason=~w\n", [_Pid,_Reason]),
     case lists:keytake(Ref, #watch.ref, State#state.watch_list) of
 	{value, W, Ws} ->
 	    fnotify_drv:unwatch(State#state.port, W#watch.wd),

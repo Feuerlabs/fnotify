@@ -24,6 +24,14 @@
 -define(FNOTIFY_REP_OK,     0).
 -define(FNOTIFY_REP_ERROR,  1).
 
+-define(FLAG_CREATE,   16#01).
+-define(FLAG_DELETE,   16#02).
+-define(FLAG_MODIFY,   16#04).  %% write|extend|modify
+-define(FLAG_ATTRIB,   16#08).  %% attribute was changed
+-define(FLAG_LINK,     16#10).  %% link count changed
+-define(FLAG_RENAME,   16#20).  %% moved renamed
+-define(FLAG_REVOKE,   16#40).
+
 -ifdef(debug).
 -define(dbg(F, A), io:format((F), (A))).
 -else.
@@ -45,12 +53,13 @@ activate(Port, N) when is_integer(N), N >= -1, N < 16#ffff ->
     do_reply(erlang:port_control(Port, ?FNOTIFY_ACTIVATE, <<N:16>>)).
 
 watch(Port, Path) ->
-    watch(Port, Path, 16#ff).
+    watch(Port, Path, [default]).
 
-watch(Port,Path, Mask) ->
+watch(Port, Path, Flags) ->
     BinPath = if is_binary(Path) -> Path;
 		 true -> list_to_binary(Path)
 	      end,
+    Mask = flags(Flags),
     Arg = <<Mask,BinPath/binary>>,
     do_reply(erlang:port_control(Port, ?FNOTIFY_ADD_WATCH, Arg)).
 
@@ -78,6 +87,16 @@ do_reply([?FNOTIFY_REP_OK,W3,W2,W1,W0]) ->
 do_reply([?FNOTIFY_REP_ERROR | Err]) ->
     {error, list_to_atom(Err)}.
 
-    
+flags(Fs) -> flags(Fs,0).
 
-	
+flags([create|Fs], Mask) -> flags(Fs, ?FLAG_CREATE bor Mask);
+flags([delete|Fs], Mask) -> flags(Fs, ?FLAG_DELETE bor Mask);
+flags([modify|Fs], Mask) -> flags(Fs, ?FLAG_MODIFY bor Mask);
+flags([attrib|Fs], Mask) -> flags(Fs, ?FLAG_ATTRIB bor Mask);
+flags([link|Fs], Mask) -> flags(Fs, ?FLAG_LINK bor Mask);
+flags([rename|Fs], Mask) -> flags(Fs, ?FLAG_RENAME bor Mask);
+flags([revoke|Fs], Mask) -> flags(Fs, ?FLAG_REVOKE bor Mask);
+flags([default|Fs], Mask) -> 
+    flags(Fs, ?FLAG_CREATE bor ?FLAG_DELETE bor ?FLAG_RENAME bor Mask);
+flags([], Mask) -> Mask.
+
