@@ -63,8 +63,10 @@ start() ->
     start([]).
 
 start(Options) ->
-    gen_server:start({local, ?SERVER}, ?MODULE, [Options], []).
-
+    application:start(fnotify),
+    Spec = {?MODULE, {?MODULE, start_link, Options},
+	    permanent, 5000, worker, [?MODULE]},
+    supervisor:start_child(fnotify_sup,  Spec).
 
 stop() ->
     gen_server:call(?SERVER, stop).
@@ -88,7 +90,9 @@ dirs() ->
 %% @end
 %%--------------------------------------------------------------------
 init([Options]) ->
-    fnotify_srv:start(),
+    %% Filter is supposed to remove watching changes in otp installation library
+    %% I assume the -pa or ERL_LIBS are used to referer to user libraries
+    %% this saves a lot of os resources.
     Filter = 
 	case proplists:get_bool(watch_lib_dir, Options) of
 	    false -> 

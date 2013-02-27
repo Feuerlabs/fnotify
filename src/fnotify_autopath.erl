@@ -75,7 +75,10 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 start() ->
-    gen_server:start({local, ?SERVER}, ?MODULE, [], []).
+    application:start(fnotify),
+    Spec = {?MODULE, {?MODULE, start_link, []},
+	    permanent, 5000, worker, [?MODULE]},
+    supervisor:start_child(fnotify_sup,  Spec).
 
 stop() ->
     gen_server:call(?SERVER, stop).
@@ -96,7 +99,6 @@ stop() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    fnotify_srv:start(),
     %% FIXME: make all directories absolute paths
     Libs0 = case os:getenv("ERL_LIBS") of
 		false -> [];
