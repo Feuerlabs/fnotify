@@ -15,18 +15,54 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
-#include <unistd.h>
-#include <errno.h>
 
 #if defined(__APPLE__)
 // should work for bsd's
 #define HAVE_KQUEUE
+#include <errno.h>
 #include <sys/event.h>
 #include <sys/stat.h>
 #include <sys/fcntl.h>
+#include <unistd.h>
+
+typedef int watch_handle_t;
+#define INVALID_HANDLE_VALUE -1
+
 #elif defined(__linux__)
 #define HAVE_INOTIFY
+// #include <unistd.h>
+#include <errno.h>
 #include <sys/inotify.h>
+
+typedef int watch_handle_t;
+#define INVALID_HANDLE_VALUE -1
+
+#elif defined(__WIN32__)
+#define HAVE_CHANGE_NOTIFICATIONS
+#include <windows.h>
+typedef HANDLE watch_handle_t;
+
+#define EAGAIN       ERROR_IO_PENDING
+#define EWOULDBLOCK  ERROR_IO_PENDING
+#define ENOMEM       ERROR_NOT_ENOUGH_MEMORY
+#define EINVAL       ERROR_BAD_ARGUMENTS
+#define EBUSY        ERROR_BUSY
+#define EOVERFLOW    ERROR_TOO_MANY_CMDS
+#define EMSGSIZE     ERROR_NO_DATA
+#define ENOTCONN     ERROR_PIPE_NOT_CONNECTED
+#define EINTR        ERROR_INVALID_AT_INTERRUPT_TIME //dummy
+#define EBADF        ERROR_INVALID_HANDLE
+#define ENOENT       ERROR_FILE_NOT_FOUND
+
+extern void _dosmaperr(DWORD);
+extern int  errno;
+
+static int get_errno()
+{
+    _dosmaperr(GetLastError());
+    return errno;
+}
+
 #else
 #error "can not use fnotify_drv"
 #endif
@@ -38,7 +74,6 @@
 typedef int  ErlDrvSizeT;
 typedef int  ErlDrvSSizeT;
 #endif
-
 
 #define FNOTIFY_ADD_WATCH  1
 #define FNOTIFY_DEL_WATCH  2
@@ -64,14 +99,14 @@ typedef int  ErlDrvSSizeT;
 
 typedef struct _watch_data_t {
     struct _watch_data_t* next;
-    int wd;
-    int flags;   // monitor flags used
+    watch_handle_t wd;
+    int flags;          // monitored flags used
     char path[1];
 } watch_data_t;
     
 typedef struct {
     ErlDrvPort       port;
-    ErlDrvEvent      event;  // kqueue or inotify
+    ErlDrvEvent      event;  // kqueue or inotify | INVALID for win32
     int              active; // -1=always, 0=no, 1=once,...
     int              nwatch;
     watch_data_t*    first;
@@ -130,7 +165,6 @@ ErlDrvTermData atm_move_self;
 ErlDrvTermData atm_open;
 ErlDrvTermData atm_cookie;
 
-
 static int        fnotify_drv_init(void);
 static void       fnotify_drv_finish(void);
 static void       fnotify_drv_stop(ErlDrvData);
@@ -142,25 +176,47 @@ static ErlDrvData fnotify_drv_start(ErlDrvPort, char* command);
 static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData,unsigned int,char*,ErlDrvSizeT,char**,ErlDrvSizeT);
 static void       fnotify_drv_timeout(ErlDrvData);
 
-#ifdef DEBUG
-extern void emit_error(int level, char* file, int line, ...);
-#define DEBUGF(args...) emit_error(5,__FILE__,__LINE__,args)
-#define INFOF(args...)  emit_error(3,__FILE__,__LINE__,args)
-#else
-#define DEBUGF(args...)
-#define INFOF(args...)
+#define DLOG_DEBUG     7
+#define DLOG_INFO      6
+#define DLOG_NOTICE    5
+#define DLOG_WARNING   4
+#define DLOG_ERROR     3
+#define DLOG_CRITICAL  2
+#define DLOG_ALERT     1
+#define DLOG_EMERGENCY 0
+#define DLOG_NONE     -1
+
+#ifndef DLOG_DEFAULT
+#define DLOG_DEFAULT DLOG_NONE
 #endif
 
-static int debug_level = 3;
-void emit_error(int level, char* file, int line, ...)
+#define DLOG(level,file,line,args...) do { \
+	if (((level) == DLOG_EMERGENCY) ||				\
+	    ((debug_level >= 0) && ((level) <= debug_level))) { \
+	    emit_error((level),(file),(line),args);		\
+	}								\
+    } while(0)
+
+#define DEBUGF(args...) DLOG(DLOG_DEBUG,__FILE__,__LINE__,args)
+#define INFOF(args...)  DLOG(DLOG_INFO,__FILE__,__LINE__,args)
+#define NOTICEF(args...)  DLOG(DLOG_NOTICE,__FILE__,__LINE__,args)
+#define WARNINGF(args...)  DLOG(DLOG_WARNING,__FILE__,__LINE__,args)
+#define ERRORF(args...)  DLOG(DLOG_ERROR,__FILE__,__LINE__,args)
+#define CRITICALF(args...)  DLOG(DLOG_CRITICAL,__FILE__,__LINE__,args)
+#define ALERTF(args...)  DLOG(DLOG_ALERT,__FILE__,__LINE__,args)
+#define EMERGENCYF(args...)  DLOG(DLOG_EMERGENCY,__FILE__,__LINE__,args)
+
+static int debug_level = DLOG_DEFAULT;
+
+static void emit_error(int level, char* file, int line, ...)
 {
     va_list ap;
     char* fmt;
 
-    if (level <= debug_level) {
+    if ((level == DLOG_EMERGENCY) ||
+	((debug_level >= 0) && (level <= debug_level))) {
 	va_start(ap, line);
 	fmt = va_arg(ap, char*);
-
 	fprintf(stderr, "%s:%d: ", file, line); 
 	vfprintf(stderr, fmt, ap);
 	fprintf(stderr, "\r\n");
@@ -168,7 +224,7 @@ void emit_error(int level, char* file, int line, ...)
     }
 }
 
-static watch_data_t* watch_data_new(char* path, size_t len, int wd)
+static watch_data_t* watch_data_new(char* path, size_t len, watch_handle_t wd)
 {
     watch_data_t* ptr = driver_alloc(len+sizeof(watch_data_t));
     if (ptr) {
@@ -191,6 +247,7 @@ static void watch_data_add(drv_data_t* dptr, watch_data_t* ptr)
 	dptr->last->next = ptr;
     else
 	dptr->first = ptr;
+    ptr->next = NULL;
     dptr->last = ptr;
     dptr->nwatch++;
 }
@@ -207,7 +264,7 @@ static void watch_data_del(drv_data_t* dptr, watch_data_t** pptr)
     }
 }
 
-static watch_data_t** watch_data_find(drv_data_t* dptr, int wd)
+static watch_data_t** watch_data_find(drv_data_t* dptr, watch_handle_t wd)
 {
     watch_data_t** pptr = &dptr->first;
     while(*pptr) {
@@ -358,24 +415,46 @@ static void fnotify_send_event(drv_data_t* dptr, struct kevent* kevp)
 	    driver_select(dptr->port, dptr->event, ERL_DRV_READ, 0);
     }
 }
+#elif defined(HAVE_CHANGE_NOTIFICATIONS)
+static void fnotify_send_event(drv_data_t* dptr, watch_data_t* ptr)
+{
+    ErlDrvTermData message[1024];
+    int i = 0;
+
+    // {fevent, wd, [], "path", []}
+    push_atom(atm_fevent);
+    push_int((int)ptr->wd);
+    push_nil();
+    push_string(ptr->path);
+    push_nil();
+    push_tuple(5);
+    driver_output_term(dptr->port, message, i);
+    // fixme active once?
+}
 #endif
 
 // initialize main desc
 static int fnotify_init_watch(drv_data_t* dptr)
 {
-    int fd = -1;
 #if defined(HAVE_INOTIFY)
-    fd = inotify_init();
+    int fd;
+    if ((fd = inotify_init()) >= 0)
+	dptr->event = (ErlDrvEvent)((long)fd);
+    DEBUGF("inotify fd=%d", fd);
+    return fd;
 #elif defined(HAVE_KQUEUE)
-    fd = kqueue();
-#endif
-    if (fd >= 0)
+    int fd;
+    if ((fd = kqueue()) >= 0)
 	dptr->event = (ErlDrvEvent)((long)fd);
     DEBUGF("kqueue fd=%d", fd);
     return fd;
+#elif defined(HAVE_CHANGE_NOTIFICATIONS)
+    dptr->event = INVALID_HANDLE_VALUE;
+    return 0;
+#endif
 }
 
-static int fnotify_add_watch(drv_data_t* dptr, char* path, size_t len, int flags)
+static watch_handle_t fnotify_add_watch(drv_data_t* dptr, char* path, size_t len, int flags)
 {
 #if defined(HAVE_INOTIFY)
     watch_data_t* wdata;
@@ -442,10 +521,48 @@ static int fnotify_add_watch(drv_data_t* dptr, char* path, size_t len, int flags
     }
     watch_data_add(dptr, wdata);
     return wd;
+#elif defined(HAVE_CHANGE_NOTIFICATIONS)
+    watch_data_t* wdata;
+    watch_handle_t wd;
+    DWORD  filter = 0;
+
+    if (flags & FLAG_CREATE) 
+	filter |= (FILE_NOTIFY_CHANGE_FILE_NAME|
+		   FILE_NOTIFY_CHANGE_DIR_NAME);
+    if (flags & FLAG_DELETE) 
+	filter |= (FILE_NOTIFY_CHANGE_FILE_NAME|
+		   FILE_NOTIFY_CHANGE_DIR_NAME);
+    if (flags & FLAG_MODIFY) 
+	filter |= (FILE_NOTIFY_CHANGE_SIZE|
+		   FILE_NOTIFY_CHANGE_LAST_WRITE);
+    if (flags & FLAG_ATTRIB)
+	filter |= (FILE_NOTIFY_CHANGE_ATTRIBUTES|
+		   FILE_NOTIFY_CHANGE_SECURITY);
+    if (flags & FLAG_RENAME) 
+	filter |= (FILE_NOTIFY_CHANGE_FILE_NAME|
+		   FILE_NOTIFY_CHANGE_DIR_NAME);
+
+    if ((wd = FindFirstChangeNotification(path, FALSE, filter)) ==
+	INVALID_HANDLE_VALUE) {
+	_dosmaperr(GetLastError());
+    }
+    else {
+	if (!(wdata = watch_data_new(path, len, wd))) {
+	    int r = get_errno();
+	    FindCloseChangeNotification(wd);
+	    errno = r;
+	    return INVALID_HANDLE_VALUE;
+	}
+	if (dptr->active)
+	    driver_select(dptr->port, wd, ERL_DRV_READ, 1);
+	wdata->flags = flags;
+	watch_data_add(dptr, wdata);
+    }
+    return wd;
 #endif
 }
 
-static int fnotify_del_watch(drv_data_t* dptr, int wd)
+static int fnotify_del_watch(drv_data_t* dptr, watch_handle_t wd)
 {
 #if defined(HAVE_INOTIFY)
     watch_data_t** pptr = watch_data_find(dptr, wd);
@@ -456,7 +573,6 @@ static int fnotify_del_watch(drv_data_t* dptr, int wd)
 	return -1;
     }
     wdata = *pptr;
-
     if ((r = inotify_rm_watch(INT(dptr->event), wd)) < 0)
 	return -1;
     watch_data_del(dptr, pptr);
@@ -476,7 +592,6 @@ static int fnotify_del_watch(drv_data_t* dptr, int wd)
 	return -1;
     }
     wdata = *pptr;
-
     // FIXME: translate flags
     EV_SET(&ev_del, wd, EVFILT_VNODE, EV_DELETE, vnode_events, 0, wdata);
     if ((r = kevent(INT(dptr->event), &ev_del, 1, NULL, 0, &timePoll)) < 0) {
@@ -488,40 +603,24 @@ static int fnotify_del_watch(drv_data_t* dptr, int wd)
     watch_data_del(dptr, pptr);
     watch_data_free(wdata);
     return r;
+#elif defined(HAVE_CHANGE_NOTIFICATIONS)
+    watch_data_t** pptr = watch_data_find(dptr, wd);
+    watch_data_t* wdata;
+    if (!pptr) {
+	errno = ENOENT;
+	return -1;
+    }
+    wdata = *pptr;
+    if (dptr->active)
+	driver_select(dptr->port, wdata->wd, ERL_DRV_READ, 0);
+    if (!FindCloseChangeNotification(wdata->wd)) {
+	get_errno();
+	return -1;
+    }
+    watch_data_del(dptr, pptr);
+    watch_data_free(wdata);
+    return 0;
 #endif
-}
-
-static void fnotify_handle_event(drv_data_t* dptr)
-{
-#if defined(HAVE_INOTIFY)
-    char buf[MAX_PATH_LEN] __attribute__((aligned(4)));
-    ssize_t len, i=0;
-
-    len = read(INT(dptr->event), buf, sizeof(buf));
-    while(i < len) {
-	struct inotify_event *event =
-	    (struct inotify_event *) &buf[i];
-	watch_data_t** pptr = watch_data_find(dptr, event->wd);
-	watch_data_t* wdata = pptr ? *pptr : 0;
-	fnotify_send_event(dptr, wdata, event);
-	i += sizeof(struct inotify_event) + event->len;
-    }
-#elif defined(HAVE_KQUEUE)
-    struct kevent ev_list[MAX_EVENTS] = { { 0 } };
-    struct timespec timePoll  = { 0, 0 }; 
-    int n;
-    int i;
-
-    n = kevent(INT(dptr->event), NULL, 0, ev_list, MAX_EVENTS, &timePoll);
-    if (n < 0) {
-	INFOF("kevent failed, %s", strerror(errno));
-	exit(1);
-	return;
-    }
-    for (i = 0; i < n; i++) {
-	fnotify_send_event(dptr, &ev_list[i]);
-    }
-#endif    
 }
 
 
@@ -571,12 +670,18 @@ static void       fnotify_drv_stop(ErlDrvData d)
 	    inotify_rm_watch(INT(dptr->event), ptr->wd);
 #elif defined(HAVE_KQUEUE)
 	    close(ptr->wd);
+#elif defined(HAVE_CHANGE_NOTIFICATIONS)
+	    if (dptr->active)
+		driver_select(dptr->port, ptr->wd, ERL_DRV_READ, 0);
+	    (void)FindCloseChangeNotification(ptr->wd);
 #endif
 	    watch_data_free(ptr);
 	    ptr = next;
 	}
+#if !defined(HAVE_CHANGE_NOTIFICATIONS)
 	DEBUGF("close fd=%d\r\n", INT(dptr->event));
 	close(INT(dptr->event));
+#endif
 	driver_free(dptr);
     }
 }
@@ -599,10 +704,51 @@ static void       fnotify_drv_outputv(ErlDrvData d, ErlIOVec* iov)
 // netlink socket triggered process data
 static void fnotify_drv_ready_input(ErlDrvData d, ErlDrvEvent event)
 {
-    drv_data_t* dptr = (drv_data_t*) d;
+#if defined(HAVE_INOTIFY)
     (void) event;
+    drv_data_t* dptr = (drv_data_t*) d;
+    char buf[MAX_PATH_LEN] __attribute__((aligned(4)));
+    ssize_t len, i=0;
+
     DEBUGF("ready_input event=%d fd=%d", INT(event), INT(dptr->event));
-    fnotify_handle_event(dptr);
+    len = read(INT(dptr->event), buf, sizeof(buf));
+    while(i < len) {
+	struct inotify_event *ievent =
+	    (struct inotify_event *) &buf[i];
+	watch_data_t** pptr = watch_data_find(dptr, ievent->wd);
+	watch_data_t* wdata = pptr ? *pptr : 0;
+	fnotify_send_event(dptr, wdata, ievent);
+	i += sizeof(struct inotify_event) + event->len;
+    }
+#elif defined(HAVE_KQUEUE)
+    (void) event;
+    drv_data_t* dptr = (drv_data_t*) d;
+    struct kevent ev_list[MAX_EVENTS] = { { 0 } };
+    struct timespec timePoll  = { 0, 0 }; 
+    int n;
+    int i;
+
+    DEBUGF("ready_input event=%d fd=%d", INT(event), INT(dptr->event));
+    n = kevent(INT(dptr->event), NULL, 0, ev_list, MAX_EVENTS, &timePoll);
+    if (n < 0) {
+	INFOF("kevent failed, %s", strerror(errno));
+	exit(1);
+	return;
+    }
+    for (i = 0; i < n; i++) {
+	fnotify_send_event(dptr, &ev_list[i]);
+    }
+#elif defined(HAVE_CHANGE_NOTIFICATIONS)
+    drv_data_t* dptr = (drv_data_t*) d;
+    watch_data_t** pptr = watch_data_find(dptr, (watch_handle_t) event);
+    DEBUGF("ready_input event=%d", INT(event));
+    if (pptr) {
+	watch_data_t* ptr = *pptr;
+	fnotify_send_event(dptr, ptr);
+	if (dptr->active)
+	    FindNextChangeNotification(ptr->wd);
+    }
+#endif
 }
 
 static void fnotify_drv_ready_output(ErlDrvData d, ErlDrvEvent event)
@@ -626,27 +772,32 @@ static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
     switch(cmd) {
 
     case FNOTIFY_ADD_WATCH: {
-	int wd;
+	long wdl;
+	watch_handle_t wd;
 	if (len < 2)
 	    goto L_einval;
 	wd = fnotify_add_watch(dptr, buf+1, len-1, buf[0]);
-	if (wd < 0) {
+	if (wd == INVALID_HANDLE_VALUE) {
 	    err = errno;
 	    goto L_error;
 	}
+	wdl = (long) wd;
 	rdata[0] = FNOTIFY_REP_OK;
-	rdata[1] = (wd >> 24) & 0xff;
-	rdata[2] = (wd >> 16) & 0xff;
-	rdata[3] = (wd >> 8) & 0xff;
-	rdata[4] = wd & 0xff;
+	rdata[1] = (wdl >> 24) & 0xff;
+	rdata[2] = (wdl >> 16) & 0xff;
+	rdata[3] = (wdl >> 8) & 0xff;
+	rdata[4] = wdl & 0xff;
 	return 5;
     }
 
     case FNOTIFY_DEL_WATCH: {
-	int wd, r;
+	long wdl;
+	watch_handle_t wd;
+	int r;
 	if (len != 4)
 	    goto L_einval;
-	wd = (U8(buf,0)<<24) | (U8(buf,1)<<16) | (U8(buf,2)<<8) | U8(buf,3);
+	wdl = (U8(buf,0)<<24) | (U8(buf,1)<<16) | (U8(buf,2)<<8) | U8(buf,3);
+	wd = (watch_handle_t) wdl;
 	r = fnotify_del_watch(dptr, wd);
 	if (r < 0) {
 	    err = errno;
@@ -657,20 +808,37 @@ static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
 
     case FNOTIFY_ACTIVATE: {  // start/stop sending events
 	int active;
-
 	if (len != 2)
 	    goto L_einval;
-	active = (((uint8_t*)buf)[0] << 8) | ((uint8_t*)buf)[1];
+	active = (U8(buf,0)<<8) | (U8(buf,1));
 	if (active == 0xffff)
 	    active = -1;
 	if (active) {
-	    if (!dptr->active)
+	    if (!dptr->active) {
+#if defined(HAVE_CHANGE_NOTIFICATIONS)
+		watch_data_t* ptr = dptr->first;	
+		while(ptr) {
+		    driver_select(dptr->port, ptr->wd, ERL_DRV_READ, 1);
+		    ptr = ptr->next;
+		}
+#else
 		driver_select(dptr->port, dptr->event, ERL_DRV_READ, 1);
+#endif
+	    }
 	    dptr->active = active;
 	}
 	else {
-	    if (dptr->active)
+	    if (dptr->active) {
+#if defined(HAVE_CHANGE_NOTIFICATIONS)	
+		watch_data_t* ptr = dptr->first;
+		while(ptr) {
+		    driver_select(dptr->port, ptr->wd, ERL_DRV_READ, 0);
+		    ptr = ptr->next;
+		}
+#else
 		driver_select(dptr->port, dptr->event, ERL_DRV_READ, 0);
+#endif
+	    }
 	    dptr->active = 0;
 	}
 	break;
@@ -692,7 +860,7 @@ L_error:
         char* err_str = erl_errno_id(err);
 	int   err_str_len = strlen(err_str);
 	if (err_str_len > 255) err_str_len = 255;
-	if (err_str_len >= rlen) err_str_len = rlen - 1;
+	if (err_str_len >= (int)rlen) err_str_len = rlen - 1;
 	memcpy(&rdata[1], err_str, err_str_len);
 	return err_str_len+1;
     }

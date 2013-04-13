@@ -9,11 +9,11 @@
 %%%---- END COPYRIGHT ---------------------------------------------------------
 %%%-------------------------------------------------------------------
 %%% @doc
-%%%    kqueue based file event server
+%%%    win32 based file event server
 %%% @end
-%%% Created :  3 Dec 2011 by Tony Rogvall <tony@rogvall.se>
+%%% Created :  12 Apr 2013 by Tony Rogvall <tony@rogvall.se>
 %%%-------------------------------------------------------------------
--module(fnotify_kevent_srv).
+-module(fnotify_win32_srv).
 
 -behaviour(gen_server).
 
@@ -188,43 +188,37 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 dir_event(W, Flags) ->
-    case lists:member(write, Flags) of
-	true ->
-	    ListDir = list_dir(true, W#watch.path),
-	    Added = ListDir -- W#watch.dir_list,
-	    Removed = W#watch.dir_list -- ListDir,
-	    {Renamed,Added1,Removed1} =	renamed(Added,Removed,[],[]),
-	    lists:foreach(
-	      fun({Name,_I}) ->
-		      W#watch.pid ! 
-			  {fevent,W#watch.ref,[create],W#watch.path,Name}
-	      end, Added1),
-	    lists:foreach(
-	      fun({Name,_I}) ->
-		      W#watch.pid ! 
-			  {fevent,W#watch.ref,[delete],W#watch.path,Name}
-	      end, Removed1),
-	    lists:foreach(
-	      fun({Name,OldName,I}) ->
-		      W#watch.pid ! 
-			  {fevent,W#watch.ref,[moved_from,{cookie,I}],
-			   W#watch.path,OldName},
-		      W#watch.pid ! 
-			  {fevent,W#watch.ref,[moved_to,{cookie,I}],
-			   W#watch.path,Name}
-	      end, Renamed),
-	    if Added1 =:= [], Removed1 =:= [], Renamed =:= [] ->
-		    W#watch.pid ! 
-			{fevent,W#watch.ref,Flags,W#watch.path,[]};
-	       true ->
-		    ok
-	    end,
-	    W#watch { dir_list = ListDir };
-	false ->
+    ListDir = list_dir(true, W#watch.path),
+    Added = ListDir -- W#watch.dir_list,
+    Removed = W#watch.dir_list -- ListDir,
+    {Renamed,Added1,Removed1} =	renamed(Added,Removed,[],[]),
+    lists:foreach(
+      fun({Name,_I}) ->
+	      W#watch.pid ! 
+		  {fevent,W#watch.ref,[create],W#watch.path,Name}
+      end, Added1),
+    lists:foreach(
+      fun({Name,_I}) ->
+	      W#watch.pid ! 
+		  {fevent,W#watch.ref,[delete],W#watch.path,Name}
+      end, Removed1),
+    lists:foreach(
+      fun({Name,OldName,I}) ->
+	      W#watch.pid ! 
+		  {fevent,W#watch.ref,[moved_from,{cookie,I}],
+		   W#watch.path,OldName},
+	      W#watch.pid ! 
+		  {fevent,W#watch.ref,[moved_to,{cookie,I}],
+		   W#watch.path,Name}
+      end, Renamed),
+    if Added1 =:= [], Removed1 =:= [], Renamed =:= [] ->
 	    W#watch.pid ! 
-		{fevent,W#watch.ref,Flags,W#watch.path,[]},
-	    W
-    end.
+		{fevent,W#watch.ref,Flags,W#watch.path,[]};
+       true ->
+	    ok
+    end,
+    W#watch { dir_list = ListDir }.
+
 	
 renamed(Added,[R={Name,I}|Removed],Removed1,Renamed) ->
     case lists:keytake(I,2,Added) of
