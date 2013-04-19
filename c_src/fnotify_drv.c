@@ -8,7 +8,7 @@
  *
  ****** END COPYRIGHT ********************************************************/
 //
-// file notification driver 
+// file notification driver
 //
 
 #include <stdio.h>
@@ -79,7 +79,7 @@ typedef int  ErlDrvSSizeT;
 #define FNOTIFY_DEL_WATCH  2
 #define FNOTIFY_ACTIVATE   3
 
-#define FNOTIFY_REP_OK     0  // + value 
+#define FNOTIFY_REP_OK     0  // + value
 #define FNOTIFY_REP_ERROR  1
 
 #define MAX_PATH_LEN   4096
@@ -103,7 +103,7 @@ typedef struct _watch_data_t {
     int flags;          // monitored flags used
     char path[1];
 } watch_data_t;
-    
+
 typedef struct {
     ErlDrvPort       port;
     ErlDrvEvent      event;  // kqueue or inotify | INVALID for win32
@@ -217,7 +217,7 @@ static void emit_error(int level, char* file, int line, ...)
 	((debug_level >= 0) && (level <= debug_level))) {
 	va_start(ap, line);
 	fmt = va_arg(ap, char*);
-	fprintf(stderr, "%s:%d: ", file, line); 
+	fprintf(stderr, "%s:%d: ", file, line);
 	vfprintf(stderr, fmt, ap);
 	fprintf(stderr, "\r\n");
 	va_end(ap);
@@ -289,7 +289,7 @@ static watch_data_t** watch_data_match(drv_data_t* dptr, char* path)
 #endif
 
 //
-// send event to erlang: 
+// send event to erlang:
 //   {fevent,<id>,[flags,{cookie,Val}],Path,Name}
 //
 #if defined(HAVE_INOTIFY)
@@ -316,7 +316,7 @@ static void fnotify_send_event(drv_data_t* dptr, watch_data_t* wdata,
     if (mask & IN_DELETE) { push_atom(atm_delete); num_flags++; }
     // file/directory deleted from watched directiory
     if (mask & IN_DELETE_SELF) { push_atom(atm_delete_self); num_flags++; }
-    // watch file/directory was itself deleted 
+    // watch file/directory was itself deleted
     if (mask & IN_MODIFY) { push_atom(atm_modify); num_flags++; }
     // file was modified
     if (mask & IN_MOVE_SELF) { push_atom(atm_move_self); num_flags++; }
@@ -329,7 +329,7 @@ static void fnotify_send_event(drv_data_t* dptr, watch_data_t* wdata,
     // file was opened
 
     // extra options to inotify_add_watch
-    // IN_DONT_FOLLOW 
+    // IN_DONT_FOLLOW
     // IN_EXCL_UNLINK
     // IN_MASK_ADD
     // IN_ONESHOT
@@ -396,7 +396,7 @@ static void fnotify_send_event(drv_data_t* dptr, struct kevent* kevp)
     // The file referenced by the descriptor was renamed
     if (mask & NOTE_REVOKE) { push_atom(atm_revoke); num_flags++; }
     // The file referenced by the descriptor was revoked via revoke(2) or
-    // the underlaying filesystem was unmounted 
+    // the underlaying filesystem was unmounted
     push_nil();
     push_list(num_flags+1);
 
@@ -469,7 +469,7 @@ static watch_handle_t fnotify_add_watch(drv_data_t* dptr, char* path, size_t len
     if (flags & FLAG_RENAME)   iflags |= (IN_MOVED_FROM|IN_MOVED_TO);
     // if (flags & FLAG_REVOKE)   iflags |= ;
     // iflags = IN_ALL_EVENTS?
-    // IN_MOVE = IN_MOVED_FROM | IN_MOVED_TO | 
+    // IN_MOVE = IN_MOVED_FROM | IN_MOVED_TO |
     // IN_CLOSE = IN_OPEN | IN_CLOSE_WRITE | IN_CLOSE_NOWRITE
 
     if (!(wdata = watch_data_new(path, len, -1)))
@@ -510,7 +510,7 @@ static watch_handle_t fnotify_add_watch(drv_data_t* dptr, char* path, size_t len
     }
     DEBUGF("open fd=%d", wd);
     wdata->wd = wd;
-    EV_SET(&ev_add, wd, EVFILT_VNODE, EV_ADD | EV_CLEAR, 
+    EV_SET(&ev_add, wd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
 	   vnode_events, 0, wdata);
     if (kevent(INT(dptr->event), &ev_add, 1, NULL, 0, &timePoll) < 0) {
 	int r = errno;
@@ -526,19 +526,19 @@ static watch_handle_t fnotify_add_watch(drv_data_t* dptr, char* path, size_t len
     watch_handle_t wd;
     DWORD  filter = 0;
 
-    if (flags & FLAG_CREATE) 
+    if (flags & FLAG_CREATE)
 	filter |= (FILE_NOTIFY_CHANGE_FILE_NAME|
 		   FILE_NOTIFY_CHANGE_DIR_NAME);
-    if (flags & FLAG_DELETE) 
+    if (flags & FLAG_DELETE)
 	filter |= (FILE_NOTIFY_CHANGE_FILE_NAME|
 		   FILE_NOTIFY_CHANGE_DIR_NAME);
-    if (flags & FLAG_MODIFY) 
+    if (flags & FLAG_MODIFY)
 	filter |= (FILE_NOTIFY_CHANGE_SIZE|
 		   FILE_NOTIFY_CHANGE_LAST_WRITE);
     if (flags & FLAG_ATTRIB)
 	filter |= (FILE_NOTIFY_CHANGE_ATTRIBUTES|
 		   FILE_NOTIFY_CHANGE_SECURITY);
-    if (flags & FLAG_RENAME) 
+    if (flags & FLAG_RENAME)
 	filter |= (FILE_NOTIFY_CHANGE_FILE_NAME|
 		   FILE_NOTIFY_CHANGE_DIR_NAME);
 
@@ -718,13 +718,13 @@ static void fnotify_drv_ready_input(ErlDrvData d, ErlDrvEvent event)
 	watch_data_t** pptr = watch_data_find(dptr, ievent->wd);
 	watch_data_t* wdata = pptr ? *pptr : 0;
 	fnotify_send_event(dptr, wdata, ievent);
-	i += sizeof(struct inotify_event) + event->len;
+	i += sizeof(struct inotify_event) + ievent->len;
     }
 #elif defined(HAVE_KQUEUE)
     (void) event;
     drv_data_t* dptr = (drv_data_t*) d;
     struct kevent ev_list[MAX_EVENTS] = { { 0 } };
-    struct timespec timePoll  = { 0, 0 }; 
+    struct timespec timePoll  = { 0, 0 };
     int n;
     int i;
 
@@ -816,7 +816,7 @@ static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
 	if (active) {
 	    if (!dptr->active) {
 #if defined(HAVE_CHANGE_NOTIFICATIONS)
-		watch_data_t* ptr = dptr->first;	
+		watch_data_t* ptr = dptr->first;
 		while(ptr) {
 		    driver_select(dptr->port, ptr->wd, ERL_DRV_READ, 1);
 		    ptr = ptr->next;
@@ -829,7 +829,7 @@ static ErlDrvSSizeT fnotify_drv_ctl(ErlDrvData d,unsigned int cmd,char* buf,
 	}
 	else {
 	    if (dptr->active) {
-#if defined(HAVE_CHANGE_NOTIFICATIONS)	
+#if defined(HAVE_CHANGE_NOTIFICATIONS)
 		watch_data_t* ptr = dptr->first;
 		while(ptr) {
 		    driver_select(dptr->port, ptr->wd, ERL_DRV_READ, 0);
