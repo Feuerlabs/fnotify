@@ -1,11 +1,11 @@
 PRIVDIR := ../priv
 
-all : $(PRIVDIR)/fnotify_driver.so
+all : $(PRIVDIR)/fnotify_drv.so
 
 override CFLAGS += -fpic -shared
 
-$(PRIVDIR)/inpevt_driver.so : fnotify_driver.o dosmap.o
+$(PRIVDIR)/fnotify_drv.so : fnotify_drv.o dosmap.o
 	$(CC) -shared -fpic $(LDFLAGS) -o $@ $^
 
 clean:
-	$(RM) -f $(PRIVDIR)/fnotify_driver.so fnotify_driver.o dosmap.o
+	$(RM) -f $(PRIVDIR)/fnotify_drv.so fnotify_drv.o dosmap.o
