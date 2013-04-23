@@ -30,7 +30,7 @@ typedef int watch_handle_t;
 
 #elif defined(__linux__)
 #define HAVE_INOTIFY
-// #include <unistd.h>
+#include <unistd.h>
 #include <errno.h>
 #include <sys/inotify.h>
 
