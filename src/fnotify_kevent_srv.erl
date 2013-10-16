@@ -76,7 +76,7 @@ init([]) ->
 handle_call({watch,Pid,Path,Flags}, _From, State) when is_pid(Pid) ->
     case fnotify_drv:watch(State#state.port,Path,Flags) of
 	{ok, Wd} ->
-	    Ref = monitor(process, Pid),
+	    Ref = erlang:monitor(process, Pid),
 	    IsDir = fnotify:is_dir(Path),
 	    ListDir   = list_dir(IsDir, Path),
 	    W = #watch { pid=Pid, ref=Ref, wd=Wd, path=Path, 
@@ -90,7 +90,7 @@ handle_call({unwatch,Ref}, _From, State) ->
     case lists:keytake(Ref, #watch.ref, State#state.watch_list) of
 	{value, W, Ws} ->
 	    fnotify_drv:unwatch(State#state.port, W#watch.wd),
-	    demonitor(Ref, [flush]),
+	    erlang:demonitor(Ref, [flush]),
 	    {reply, ok, State#state { watch_list = Ws }};
 	false ->
 	    {reply, {error,enoent}, State}
