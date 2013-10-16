@@ -75,6 +75,12 @@ typedef int  ErlDrvSizeT;
 typedef int  ErlDrvSSizeT;
 #endif
 
+#if (ERL_DRV_EXTENDED_MAJOR_VERSION > 2) || ((ERL_DRV_EXTENDED_MAJOR_VERSION == 2) && (ERL_DRV_EXTENDED_MINOR_VERSION >= 1))
+#define OUTPUT_TERM(ctx, message, len) erl_drv_output_term((ctx)->dport,(message),(len))
+#else
+#define OUTPUT_TERM(ctx, message, len) driver_output_term((ctx)->port,(message),(len))
+#endif
+
 #define FNOTIFY_ADD_WATCH  1
 #define FNOTIFY_DEL_WATCH  2
 #define FNOTIFY_ACTIVATE   3
@@ -106,6 +112,7 @@ typedef struct _watch_data_t {
 
 typedef struct {
     ErlDrvPort       port;
+    ErlDrvTermData  dport;
     ErlDrvEvent      event;  // kqueue or inotify | INVALID for win32
     int              active; // -1=always, 0=no, 1=once,...
     int              nwatch;
@@ -356,7 +363,7 @@ static void fnotify_send_event(drv_data_t* dptr, watch_data_t* wdata,
 
     push_tuple(5);
 
-    driver_output_term(dptr->port, message, i);
+    OUTPUT_TERM(dptr, message, i);
 
     if (dptr->active > 0) {
 	dptr->active--;
@@ -407,7 +414,7 @@ static void fnotify_send_event(drv_data_t* dptr, struct kevent* kevp)
     push_nil();  // should be the "file" event is covering
     push_tuple(5);
 
-    driver_output_term(dptr->port, message, i);
+    OUTPUT_TERM(dptr, message, i);
 
     if (dptr->active > 0) {
 	dptr->active--;
@@ -428,7 +435,7 @@ static void fnotify_send_event(drv_data_t* dptr, watch_data_t* ptr)
     push_string(ptr->path);
     push_nil();
     push_tuple(5);
-    driver_output_term(dptr->port, message, i);
+    OUTPUT_TERM(dptr, message, i);
     // fixme active once?
 }
 #endif
@@ -885,6 +892,7 @@ static ErlDrvData fnotify_drv_start(ErlDrvPort port, char* command)
 
     memset(dptr, 0, sizeof(drv_data_t));
     dptr->port = port;
+    dptr->dport = driver_mk_port(port);
 
     if (fnotify_init_watch(dptr) < 0) {
 	err = errno;
