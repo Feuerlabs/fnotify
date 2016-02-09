@@ -256,9 +256,6 @@ handle_erl_path(_FEvent={fevent,_Ref,Flags,Path,Name}, State) ->
 				end,
 		    code:purge(Module),
 		    case code:load_abs(FileName) of
-			ok ->
-			    ?dbg("load_abs ok\n", []),
-			    {noreply,State};
 			{module,_Mod} ->
 			    if WasLoaded ->
 				    io:format("module '~s' reloaded\n", [_Mod]);
